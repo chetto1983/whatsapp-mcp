@@ -641,7 +641,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Download the media using whatsmeow client
-	mediaData, err := client.Download(downloader)
+	mediaData, err := client.Download(context.Background(), downloader)
 	if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
@@ -708,6 +708,27 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		// Send the message
 		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath)
 		fmt.Println("Message sent", success, message)
+
+		// Spike-002 patch: whatsmeow does not echo self-sent messages as events,
+		// so persist REST-sent text here — read-back ground truth for Aura E2E.
+		if success && req.Message != "" {
+			chatJID := req.Recipient
+			if !strings.Contains(chatJID, "@") {
+				chatJID = req.Recipient + "@s.whatsapp.net"
+			}
+			sender := ""
+			if client.Store.ID != nil {
+				sender = client.Store.ID.User
+			}
+			now := time.Now()
+			localID := fmt.Sprintf("aura-local-%d", now.UnixNano())
+			if err := messageStore.StoreChat(chatJID, req.Recipient, now); err != nil {
+				fmt.Println("Warning: failed to store chat for sent message:", err)
+			}
+			if err := messageStore.StoreMessage(localID, chatJID, sender, req.Message, now, true, "", "", "", nil, nil, nil, 0); err != nil {
+				fmt.Println("Warning: failed to store sent message:", err)
+			}
+		}
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
 
@@ -800,14 +821,14 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
 
 	// Get device store - This contains session information
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No device exists, create one
@@ -973,7 +994,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
@@ -988,7 +1009,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Infof("Getting name for contact: %s", chatJID)
 
 		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(jid)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
 		} else if sender != "" {
