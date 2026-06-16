@@ -247,5 +247,9 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
         }
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    # Aura: serve the MCP over streamable-HTTP so the agent can mount it on a
+    # loopback port (catalog recipe:whatsapp -> http://host:8080/mcp/). The MCP_PORT
+    # env lets the container override; default 8080 matches the image EXPOSE.
+    import os
+    port = int(os.getenv("MCP_PORT", "8080"))
+    mcp.run(transport="http", host="0.0.0.0", port=port)

@@ -13,7 +13,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -676,7 +678,59 @@ func extractDirectPathFromURL(url string) string {
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+// pairingState is the bridge's connection/pairing snapshot the management REST API
+// (/api/status, /api/qr) exposes so Aura's cockpit can drive WhatsApp linking without
+// the terminal QR. whatsmeow emits a rotating sequence of QR "code" events; we keep
+// the latest under a mutex and flip to paired on a successful link.
+type pairingState struct {
+	mu     sync.RWMutex
+	qrCode string
+	paired bool
+	jid    string
+}
+
+func (s *pairingState) setQR(code string) {
+	s.mu.Lock()
+	s.qrCode = code
+	s.paired = false
+	s.mu.Unlock()
+}
+
+func (s *pairingState) setPaired(jid string) {
+	s.mu.Lock()
+	s.qrCode = ""
+	s.paired = true
+	s.jid = jid
+	s.mu.Unlock()
+}
+
+func (s *pairingState) setLoggedOut() {
+	s.mu.Lock()
+	s.qrCode = ""
+	s.paired = false
+	s.jid = ""
+	s.mu.Unlock()
+}
+
+func (s *pairingState) snapshot() (qr string, paired bool, jid string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.qrCode, s.paired, s.jid
+}
+
+// bridgePort resolves the REST API port from WHATSAPP_BRIDGE_PORT (default 8081 so it
+// never collides with the Python FastMCP front on 8080, and matches the
+// WHATSAPP_API_BASE_URL the front dials).
+func bridgePort() int {
+	if v := strings.TrimSpace(os.Getenv("WHATSAPP_BRIDGE_PORT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
+			return n
+		}
+	}
+	return 8081
+}
+
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *pairingState, port int) {
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -795,6 +849,55 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
+	// Management API the cockpit drives to link a device without the terminal QR.
+	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		qr, paired, jid := state.snapshot()
+		st := "initializing"
+		switch {
+		case paired:
+			st = "connected"
+		case qr != "":
+			st = "waiting_qr"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"state":     st,
+			"paired":    paired,
+			"jid":       jid,
+			"connected": client.IsConnected(),
+		})
+	})
+
+	http.HandleFunc("/api/qr", func(w http.ResponseWriter, r *http.Request) {
+		qr, paired, _ := state.snapshot()
+		w.Header().Set("Content-Type", "application/json")
+		if paired {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "already paired"})
+			return
+		}
+		if qr == "" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "qr not ready"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": qr})
+	})
+
+	http.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := client.Logout(context.Background()); err != nil {
+			http.Error(w, fmt.Sprintf("logout failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		state.setLoggedOut()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	})
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
@@ -855,6 +958,10 @@ func main() {
 	}
 	defer messageStore.Close()
 
+	// pairing state the management REST API exposes (declared before the handler so
+	// Connected/LoggedOut events keep it current).
+	state := &pairingState{}
+
 	// Setup event handling for messages and history sync
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
@@ -868,66 +975,53 @@ func main() {
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+			if client.Store.ID != nil {
+				state.setPaired(client.Store.ID.String())
+			}
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
+			state.setLoggedOut()
 		}
 	})
 
-	// Create channel to track connection success
-	connected := make(chan bool, 1)
+	// Start the REST API (incl. the management endpoints) BEFORE connecting so the
+	// cockpit can read /api/qr + /api/status during pairing. ListenAndServe runs in a
+	// goroutine inside startRESTServer, so this call does not block.
+	startRESTServer(client, messageStore, state, bridgePort())
 
-	// Connect to WhatsApp
+	// Connect to WhatsApp. The bridge stays up serving the REST API whether or not a
+	// device is linked yet — pairing is asynchronous (cockpit-driven via /api/qr), so
+	// there is no fatal "QR scan timeout" exit anymore.
 	if client.Store.ID == nil {
-		// No ID stored, this is a new client, need to pair with phone
+		// New client: surface the rotating QR via the management API + the terminal.
 		qrChan, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
-		if err != nil {
+		if err = client.Connect(); err != nil {
 			logger.Errorf("Failed to connect: %v", err)
 			return
 		}
-
-		// Print QR code for pairing with phone
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-			} else if evt.Event == "success" {
-				connected <- true
-				break
+		go func() {
+			for evt := range qrChan {
+				switch evt.Event {
+				case "code":
+					state.setQR(evt.Code)
+					fmt.Println("\nScan this QR code with your WhatsApp app (or use the cockpit):")
+					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+				case "success":
+					fmt.Println("\nSuccessfully linked!")
+				}
 			}
-		}
-
-		// Wait for connection
-		select {
-		case <-connected:
-			fmt.Println("\nSuccessfully connected and authenticated!")
-		case <-time.After(3 * time.Minute):
-			logger.Errorf("Timeout waiting for QR code scan")
-			return
-		}
+		}()
 	} else {
-		// Already logged in, just connect
-		err = client.Connect()
-		if err != nil {
+		// Already linked: connect and mark paired.
+		if err = client.Connect(); err != nil {
 			logger.Errorf("Failed to connect: %v", err)
 			return
 		}
-		connected <- true
+		if client.Store.ID != nil {
+			state.setPaired(client.Store.ID.String())
+		}
 	}
-
-	// Wait a moment for connection to stabilize
-	time.Sleep(2 * time.Second)
-
-	if !client.IsConnected() {
-		logger.Errorf("Failed to establish stable connection")
-		return
-	}
-
-	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
-
-	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
