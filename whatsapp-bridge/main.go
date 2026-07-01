@@ -2016,6 +2016,27 @@ func pairingSnapshot(state *pairingState, client *whatsmeow.Client) map[string]a
 	return status
 }
 
+type whatsAppClientRef struct {
+	mu     sync.RWMutex
+	client *whatsmeow.Client
+}
+
+func newWhatsAppClientRef(client *whatsmeow.Client) *whatsAppClientRef {
+	return &whatsAppClientRef{client: client}
+}
+
+func (ref *whatsAppClientRef) Get() *whatsmeow.Client {
+	ref.mu.RLock()
+	defer ref.mu.RUnlock()
+	return ref.client
+}
+
+func (ref *whatsAppClientRef) Set(client *whatsmeow.Client) {
+	ref.mu.Lock()
+	defer ref.mu.Unlock()
+	ref.client = client
+}
+
 func signalRelink(relinkChan chan<- bool) {
 	if relinkChan == nil {
 		return
@@ -2050,6 +2071,29 @@ var logoutWhatsAppClient = func(ctx context.Context, client *whatsmeow.Client) e
 		replaceDeletedDevice(client)
 	}
 	return nil
+}
+
+func rotateWhatsAppClientForRelink(ref *whatsAppClientRef, createClient func() (*whatsmeow.Client, error), registerClient func(*whatsmeow.Client)) (*whatsmeow.Client, error) {
+	freshClient, err := createClient()
+	if err != nil {
+		return nil, err
+	}
+	if freshClient == nil {
+		return nil, fmt.Errorf("created WhatsApp client is nil")
+	}
+
+	oldClient := ref.Get()
+	if oldClient != nil {
+		if oldClient.IsConnected() {
+			oldClient.Disconnect()
+		}
+		oldClient.RemoveEventHandlers()
+	}
+	if registerClient != nil {
+		registerClient(freshClient)
+	}
+	ref.Set(freshClient)
+	return freshClient, nil
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload map[string]any) {
@@ -2094,9 +2138,21 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, port int, 
 }
 
 func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState, relinkChan chan<- bool) *http.ServeMux {
+	return newRESTMuxWithClientGetter(func() *whatsmeow.Client {
+		return client
+	}, messageStore, port, token, allowedMediaRoots, pairing, relinkChan)
+}
+
+func newRESTMuxWithClientGetter(getClient func() *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState, relinkChan chan<- bool) *http.ServeMux {
 	allowedHosts := buildAllowedHosts(port)
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
 		return withAuth(token, allowedHosts, h)
+	}
+	currentClient := func() *whatsmeow.Client {
+		if getClient == nil {
+			return nil
+		}
+		return getClient()
 	}
 	mux := http.NewServeMux()
 
@@ -2105,6 +2161,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		client := currentClient()
 		writeJSON(w, http.StatusOK, pairingSnapshot(pairing, client))
 	})
 
@@ -2136,8 +2193,9 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		client := currentClient()
 		_, wasPaired, _, _, _ := pairing.snapshot()
-		hadDeviceID := client.Store != nil && client.Store.ID != nil
+		hadDeviceID := client != nil && client.Store != nil && client.Store.ID != nil
 		if err := logoutWhatsAppClient(context.Background(), client); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": err.Error()})
 			return
@@ -2151,6 +2209,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 
 	// Health check endpoint
 	mux.HandleFunc("/api/health", auth(func(w http.ResponseWriter, r *http.Request) {
+		client := currentClient()
 		w.Header().Set("Content-Type", "application/json")
 		status := map[string]interface{}{
 			"status":    "ok",
@@ -2171,6 +2230,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		client := currentClient()
 
 		fmt.Printf("→ /api/send from=%q user_agent=%q\n", r.RemoteAddr, r.UserAgent())
 
@@ -2239,6 +2299,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		client := currentClient()
 		var req ReactRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Recipient == "" || req.MessageID == "" || req.Emoji == nil {
 			http.Error(w, "recipient, message_id, and emoji are required", http.StatusBadRequest)
@@ -2252,7 +2313,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 		var senderJID types.JID
 		switch {
 		case req.FromMe:
-			if client.Store.ID == nil {
+			if client == nil || client.Store == nil || client.Store.ID == nil {
 				http.Error(w, "Not logged in", http.StatusServiceUnavailable)
 				return
 			}
@@ -2290,6 +2351,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		client := currentClient()
 
 		// Check if connected
 		if !client.IsConnected() {
@@ -2355,6 +2417,7 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		client := currentClient()
 
 		// Parse the request body
 		var req struct {
@@ -2428,7 +2491,13 @@ func newRESTMuxWithRelink(client *whatsmeow.Client, messageStore *MessageStore, 
 }
 
 func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState, relinkChan chan<- bool) {
-	handler := newRESTMuxWithRelink(client, messageStore, port, token, allowedMediaRoots, pairing, relinkChan)
+	startRESTServerWithClientGetter(func() *whatsmeow.Client {
+		return client
+	}, messageStore, port, token, allowedMediaRoots, pairing, relinkChan)
+}
+
+func startRESTServerWithClientGetter(getClient func() *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState, relinkChan chan<- bool) {
+	handler := newRESTMuxWithClientGetter(getClient, messageStore, port, token, allowedMediaRoots, pairing, relinkChan)
 
 	// Start the server with proper timeouts. Bind to loopback by default; the
 	// Docker sidecar sets WHATSAPP_BRIDGE_HOST=0.0.0.0 for inter-container use.
@@ -2653,128 +2722,139 @@ func main() {
 	// Channel to signal reconnection needs
 	reconnectChan := make(chan bool, 1)
 	relinkChan := make(chan bool, 1)
+	clientRef := newWhatsAppClientRef(client)
+	newRelinkClient := func() (*whatsmeow.Client, error) {
+		freshClient := whatsmeow.NewClient(container.NewDevice(), logger)
+		if freshClient == nil {
+			return nil, fmt.Errorf("failed to create fresh WhatsApp client")
+		}
+		return freshClient, nil
+	}
 
 	// Setup event handling for messages and history sync
-	client.AddEventHandler(func(evt interface{}) {
-		switch v := evt.(type) {
-		case *events.Message:
-			// Process regular messages
-			handleMessage(client, messageStore, v, logger)
+	registerClient := func(client *whatsmeow.Client) {
+		client.AddEventHandler(func(evt interface{}) {
+			switch v := evt.(type) {
+			case *events.Message:
+				// Process regular messages
+				handleMessage(client, messageStore, v, logger)
 
-		case *events.HistorySync:
-			// Process history sync events
-			handleHistorySync(client, messageStore, v, logger)
+			case *events.HistorySync:
+				// Process history sync events
+				handleHistorySync(client, messageStore, v, logger)
 
-		case *events.GroupInfo:
-			if v.Ephemeral != nil {
-				expiration := uint32(0)
-				if v.Ephemeral.IsEphemeral {
-					expiration = v.Ephemeral.DisappearingTimer
+			case *events.GroupInfo:
+				if v.Ephemeral != nil {
+					expiration := uint32(0)
+					if v.Ephemeral.IsEphemeral {
+						expiration = v.Ephemeral.DisappearingTimer
+					}
+					if err := messageStore.UpdateChatEphemeralSettings(v.JID.String(), expiration, v.Timestamp.Unix()); err != nil {
+						logger.Warnf("Failed to store group ephemeral settings for %s: %v", v.JID, err)
+					}
 				}
-				if err := messageStore.UpdateChatEphemeralSettings(v.JID.String(), expiration, v.Timestamp.Unix()); err != nil {
-					logger.Warnf("Failed to store group ephemeral settings for %s: %v", v.JID, err)
+
+			case *events.CallOffer:
+				// 1:1 incoming call. call_type defaults to "voice"; CallOffer
+				// doesn't expose Media directly (it's buried in the binary Data
+				// node). Group calls come through CallOfferNotice instead, which
+				// DOES expose Media cleanly.
+				handleCallOffer(client, messageStore, v.BasicCallMeta, "voice", false, logger)
+
+			case *events.CallOfferNotice:
+				// Group calls. v.Media is "audio" or "video"; normalize to our
+				// "voice"/"video" convention.
+				callType := "voice"
+				if v.Media == "video" {
+					callType = "video"
 				}
-			}
+				isGroup := v.Type == "group" || !v.BasicCallMeta.GroupJID.IsEmpty()
+				handleCallOffer(client, messageStore, v.BasicCallMeta, callType, isGroup, logger)
 
-		case *events.CallOffer:
-			// 1:1 incoming call. call_type defaults to "voice"; CallOffer
-			// doesn't expose Media directly (it's buried in the binary Data
-			// node). Group calls come through CallOfferNotice instead, which
-			// DOES expose Media cleanly.
-			handleCallOffer(client, messageStore, v.BasicCallMeta, "voice", false, logger)
+			case *events.CallAccept:
+				if err := messageStore.MarkCallAnswered(v.CallID, callChatJID(v.BasicCallMeta)); err != nil {
+					logger.Warnf("Failed to mark call answered: %v", err)
+				} else {
+					logger.Infof("Call answered: id=%s", v.CallID)
+				}
 
-		case *events.CallOfferNotice:
-			// Group calls. v.Media is "audio" or "video"; normalize to our
-			// "voice"/"video" convention.
-			callType := "voice"
-			if v.Media == "video" {
-				callType = "video"
-			}
-			isGroup := v.Type == "group" || !v.BasicCallMeta.GroupJID.IsEmpty()
-			handleCallOffer(client, messageStore, v.BasicCallMeta, callType, isGroup, logger)
+			case *events.CallReject:
+				if err := messageStore.MarkCallRejected(v.CallID, callChatJID(v.BasicCallMeta)); err != nil {
+					logger.Warnf("Failed to mark call rejected: %v", err)
+				} else {
+					logger.Infof("Call rejected: id=%s", v.CallID)
+				}
 
-		case *events.CallAccept:
-			if err := messageStore.MarkCallAnswered(v.CallID, callChatJID(v.BasicCallMeta)); err != nil {
-				logger.Warnf("Failed to mark call answered: %v", err)
-			} else {
-				logger.Infof("Call answered: id=%s", v.CallID)
-			}
+			case *events.CallTerminate:
+				if err := messageStore.MarkCallTerminated(v.CallID, callChatJID(v.BasicCallMeta), v.Reason, v.Timestamp); err != nil {
+					logger.Warnf("Failed to mark call terminated: %v", err)
+				} else {
+					logger.Infof("Call terminated: id=%s reason=%q", v.CallID, v.Reason)
+				}
 
-		case *events.CallReject:
-			if err := messageStore.MarkCallRejected(v.CallID, callChatJID(v.BasicCallMeta)); err != nil {
-				logger.Warnf("Failed to mark call rejected: %v", err)
-			} else {
-				logger.Infof("Call rejected: id=%s", v.CallID)
-			}
+			case *events.Connected:
+				if client.Store != nil && client.Store.ID != nil {
+					state.setPaired(client.Store.ID.String())
+				}
+				logger.Infof("✓ Successfully connected to WhatsApp servers")
 
-		case *events.CallTerminate:
-			if err := messageStore.MarkCallTerminated(v.CallID, callChatJID(v.BasicCallMeta), v.Reason, v.Timestamp); err != nil {
-				logger.Warnf("Failed to mark call terminated: %v", err)
-			} else {
-				logger.Infof("Call terminated: id=%s reason=%q", v.CallID, v.Reason)
-			}
+			case *events.LoggedOut:
+				state.setLoggedOut()
+				signalRelink(relinkChan)
+				logger.Warnf("⚠️  Device logged out, please scan QR code to log in again")
 
-		case *events.Connected:
-			if client.Store != nil && client.Store.ID != nil {
-				state.setPaired(client.Store.ID.String())
-			}
-			logger.Infof("✓ Successfully connected to WhatsApp servers")
+			case *events.Disconnected:
+				state.setUnavailable("disconnected", "disconnected from WhatsApp servers")
+				logger.Warnf("⚠️  Disconnected from WhatsApp servers, will attempt reconnection...")
+				// Signal reconnection needed
+				select {
+				case reconnectChan <- true:
+				default:
+					// Channel already has a reconnect signal
+				}
 
-		case *events.LoggedOut:
-			state.setLoggedOut()
-			signalRelink(relinkChan)
-			logger.Warnf("⚠️  Device logged out, please scan QR code to log in again")
-
-		case *events.Disconnected:
-			state.setUnavailable("disconnected", "disconnected from WhatsApp servers")
-			logger.Warnf("⚠️  Disconnected from WhatsApp servers, will attempt reconnection...")
-			// Signal reconnection needed
-			select {
-			case reconnectChan <- true:
-			default:
-				// Channel already has a reconnect signal
-			}
-
-		case *events.ConnectFailure:
-			state.setUnavailable("connect_failure", fmt.Sprint(v.Reason))
-			logger.Errorf("❌ Connection failure: %v", v.Reason)
-			// Signal reconnection needed
-			select {
-			case reconnectChan <- true:
-			default:
-			}
-
-		case *events.StreamError:
-			state.setUnavailable("stream_error", fmt.Sprint(v.Code))
-			logger.Errorf("❌ Stream error: %v", v.Code)
-			// Signal reconnection needed
-			select {
-			case reconnectChan <- true:
-			default:
-			}
-
-		case *events.StreamReplaced:
-			state.setUnavailable("stream_replaced", "stream replaced by another WhatsApp session")
-			// Another WhatsApp Web session took our slot. whatsmeow treats this
-			// as a "permanent" disconnect and suppresses the Disconnected event,
-			// so we must handle it explicitly. Wait briefly to avoid ping-ponging
-			// with the other client, then reconnect.
-			logger.Warnf("⚠️  Stream replaced by another session — will reconnect after 30s")
-			go func() {
-				time.Sleep(30 * time.Second)
+			case *events.ConnectFailure:
+				state.setUnavailable("connect_failure", fmt.Sprint(v.Reason))
+				logger.Errorf("❌ Connection failure: %v", v.Reason)
+				// Signal reconnection needed
 				select {
 				case reconnectChan <- true:
 				default:
 				}
-			}()
 
-		case *events.ClientOutdated:
-			state.setUnavailable("client_outdated", "whatsmeow client outdated")
-			logger.Errorf("❌ Client outdated - please update whatsmeow library")
-		}
-	})
+			case *events.StreamError:
+				state.setUnavailable("stream_error", fmt.Sprint(v.Code))
+				logger.Errorf("❌ Stream error: %v", v.Code)
+				// Signal reconnection needed
+				select {
+				case reconnectChan <- true:
+				default:
+				}
 
-	startRESTServer(client, messageStore, port, bridgeToken, allowedMediaRoots, state, relinkChan)
+			case *events.StreamReplaced:
+				state.setUnavailable("stream_replaced", "stream replaced by another WhatsApp session")
+				// Another WhatsApp Web session took our slot. whatsmeow treats this
+				// as a "permanent" disconnect and suppresses the Disconnected event,
+				// so we must handle it explicitly. Wait briefly to avoid ping-ponging
+				// with the other client, then reconnect.
+				logger.Warnf("⚠️  Stream replaced by another session — will reconnect after 30s")
+				go func() {
+					time.Sleep(30 * time.Second)
+					select {
+					case reconnectChan <- true:
+					default:
+					}
+				}()
+
+			case *events.ClientOutdated:
+				state.setUnavailable("client_outdated", "whatsmeow client outdated")
+				logger.Errorf("❌ Client outdated - please update whatsmeow library")
+			}
+		})
+	}
+	registerClient(client)
+
+	startRESTServerWithClientGetter(clientRef.Get, messageStore, port, bridgeToken, allowedMediaRoots, state, relinkChan)
 
 	// Add connection retry logic. The REST management API stays up while this
 	// loop rotates QR codes, so Aura can keep polling until the user links.
@@ -2838,13 +2918,14 @@ func main() {
 			case <-relinkChan:
 				logger.Infof("Starting WhatsApp relink flow...")
 				reconnectBackoff = time.Second * 5
-				if client.IsConnected() {
-					client.Disconnect()
+				freshClient, err := rotateWhatsAppClientForRelink(clientRef, newRelinkClient, registerClient)
+				if err != nil {
+					state.setUnavailable("client_rotation_error", err.Error())
+					logger.Errorf("Failed to rotate WhatsApp client for relink: %v", err)
+					continue
 				}
+				client = freshClient
 				for attempt := 1; ; attempt++ {
-					if replaceDeletedDevice(client) {
-						logger.Infof("Created fresh WhatsApp device store for relink")
-					}
 					if client.Store != nil && client.Store.ID != nil {
 						logger.Infof("Relink requested but a device ID is still present; reconnecting existing session")
 						if err := client.Connect(); err != nil {

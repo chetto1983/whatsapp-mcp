@@ -2344,6 +2344,67 @@ func TestManagementLogoutSignalsRelink(t *testing.T) {
 	}
 }
 
+func TestManagementLogoutUsesCurrentClientAfterRelink(t *testing.T) {
+	const token = "supersecrettoken1234567890abcdef"
+
+	oldClient := newTestClientWithSelf(&mockLIDStore{}, phonePN)
+	currentClient := newWhatsAppClientRef(oldClient)
+	newClient := newTestClient(&mockLIDStore{})
+
+	state := &pairingState{}
+	state.setPaired(phonePN.String())
+	relinkChan := make(chan bool, 1)
+	handler := newRESTMuxWithClientGetter(currentClient.Get, newTestMessageStore(t), 8080, token, nil, state, relinkChan)
+
+	currentClient.Set(newClient)
+	state.setQR("fresh-code")
+
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/logout", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	qr, paired, _, stateValue, _ := state.snapshot()
+	if paired || qr != "fresh-code" || stateValue != "waiting_qr" {
+		t.Fatalf("logout used stale client state after relink: paired=%v qr=%q state=%q", paired, qr, stateValue)
+	}
+	select {
+	case <-relinkChan:
+		t.Fatal("logout on the current unpaired client should not request another relink")
+	default:
+	}
+}
+
+func TestRotateWhatsAppClientForRelinkPublishesFreshClient(t *testing.T) {
+	oldClient := newTestClientWithSelf(&mockLIDStore{}, phonePN)
+	freshClient := newTestClient(&mockLIDStore{})
+	currentClient := newWhatsAppClientRef(oldClient)
+	registered := false
+
+	got, err := rotateWhatsAppClientForRelink(currentClient, func() (*whatsmeow.Client, error) {
+		return freshClient, nil
+	}, func(client *whatsmeow.Client) {
+		if client != freshClient {
+			t.Fatalf("registered client = %p, want fresh client %p", client, freshClient)
+		}
+		registered = true
+	})
+	if err != nil {
+		t.Fatalf("rotateWhatsAppClientForRelink returned error: %v", err)
+	}
+	if got != freshClient {
+		t.Fatalf("returned client = %p, want fresh client %p", got, freshClient)
+	}
+	if currentClient.Get() != freshClient {
+		t.Fatal("current client was not updated to the fresh client")
+	}
+	if !registered {
+		t.Fatal("fresh client was not registered for events")
+	}
+}
+
 func TestManagementLogoutWhileWaitingQRKeepsQRCode(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
 	state := &pairingState{}
