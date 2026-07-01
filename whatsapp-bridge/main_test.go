@@ -33,6 +33,16 @@ type mockLIDStore struct {
 	pnByLID map[types.JID]types.JID
 }
 
+type mockDeviceFactory struct {
+	store.NoopStore
+	created bool
+}
+
+func (m *mockDeviceFactory) NewDevice() *store.Device {
+	m.created = true
+	return &store.Device{Container: m}
+}
+
 func (m *mockLIDStore) GetLIDForPN(_ context.Context, pn types.JID) (types.JID, error) {
 	if lid, ok := m.lidByPN[pn]; ok {
 		return lid, nil
@@ -66,6 +76,27 @@ func newTestClientWithSelf(lidStore store.LIDStore, selfPhone types.JID) *whatsm
 	pn := selfPhone.ToNonAD()
 	c.Store.ID = &pn
 	return c
+}
+
+func TestReplaceDeletedDeviceUsesContainerFactory(t *testing.T) {
+	client := newTestClient(&mockLIDStore{})
+	factory := &mockDeviceFactory{}
+	oldStore := client.Store
+	oldStore.Container = factory
+	oldStore.Deleted = true
+
+	if !replaceDeletedDevice(client) {
+		t.Fatal("replaceDeletedDevice returned false")
+	}
+	if !factory.created {
+		t.Fatal("device factory was not used")
+	}
+	if client.Store == oldStore {
+		t.Fatal("deleted device store was not replaced")
+	}
+	if client.Store.Deleted {
+		t.Fatal("replacement device store is marked deleted")
+	}
 }
 
 // querySender returns the sender column for the first message stored under a

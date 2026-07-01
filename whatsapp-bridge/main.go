@@ -2026,12 +2026,28 @@ func signalRelink(relinkChan chan<- bool) {
 	}
 }
 
+type deviceFactory interface {
+	NewDevice() *store.Device
+}
+
+func replaceDeletedDevice(client *whatsmeow.Client) bool {
+	if client == nil || client.Store == nil || !client.Store.Deleted {
+		return false
+	}
+	factory, ok := client.Store.Container.(deviceFactory)
+	if !ok {
+		return false
+	}
+	client.Store = factory.NewDevice()
+	return true
+}
+
 var logoutWhatsAppClient = func(ctx context.Context, client *whatsmeow.Client) error {
 	if client.Store != nil && client.Store.ID != nil {
 		if err := client.Logout(ctx); err != nil {
 			return err
 		}
-		client.Store.ID = nil
+		replaceDeletedDevice(client)
 	}
 	return nil
 }
@@ -2826,6 +2842,9 @@ func main() {
 					client.Disconnect()
 				}
 				for attempt := 1; ; attempt++ {
+					if replaceDeletedDevice(client) {
+						logger.Infof("Created fresh WhatsApp device store for relink")
+					}
 					if client.Store != nil && client.Store.ID != nil {
 						logger.Infof("Relink requested but a device ID is still present; reconnecting existing session")
 						if err := client.Connect(); err != nil {
@@ -2858,6 +2877,9 @@ func main() {
 
 				// Try to reconnect
 				if !client.IsConnected() {
+					if replaceDeletedDevice(client) {
+						logger.Infof("Created fresh WhatsApp device store before reconnect")
+					}
 					if client.Store == nil || client.Store.ID == nil {
 						logger.Infof("Reconnect requested without a paired device; starting QR relink flow")
 						signalRelink(relinkChan)
