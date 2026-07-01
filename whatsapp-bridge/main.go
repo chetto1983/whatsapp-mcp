@@ -2073,6 +2073,17 @@ var logoutWhatsAppClient = func(ctx context.Context, client *whatsmeow.Client) e
 	return nil
 }
 
+// requestBridgeRestart exits this bridge process after the logout response has a
+// short window to flush. The container entrypoint exits when the bridge exits;
+// Compose's restart policy then starts a clean sidecar instead of relying on an
+// in-process QR relink after logout.
+var requestBridgeRestart = func() {
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
+
 func rotateWhatsAppClientForRelink(ref *whatsAppClientRef, createClient func() (*whatsmeow.Client, error), registerClient func(*whatsmeow.Client)) (*whatsmeow.Client, error) {
 	freshClient, err := createClient()
 	if err != nil {
@@ -2200,11 +2211,13 @@ func newRESTMuxWithClientGetter(getClient func() *whatsmeow.Client, messageStore
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": err.Error()})
 			return
 		}
+		restart := false
 		if hadDeviceID || wasPaired {
 			pairing.setLoggedOut()
-			signalRelink(relinkChan)
+			restart = true
+			requestBridgeRestart()
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart": restart})
 	})
 
 	// Health check endpoint

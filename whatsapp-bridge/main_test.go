@@ -2303,10 +2303,14 @@ func TestManagementQRRotatesAndClearsOnUnavailable(t *testing.T) {
 	}
 }
 
-func TestManagementLogoutSignalsRelink(t *testing.T) {
+func TestManagementLogoutRequestsRestartInsteadOfRelink(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
 	origLogout := logoutWhatsAppClient
-	t.Cleanup(func() { logoutWhatsAppClient = origLogout })
+	origRestart := requestBridgeRestart
+	t.Cleanup(func() {
+		logoutWhatsAppClient = origLogout
+		requestBridgeRestart = origRestart
+	})
 
 	logoutCalled := false
 	logoutWhatsAppClient = func(_ context.Context, client *whatsmeow.Client) error {
@@ -2315,6 +2319,10 @@ func TestManagementLogoutSignalsRelink(t *testing.T) {
 			client.Store.ID = nil
 		}
 		return nil
+	}
+	restartCalled := false
+	requestBridgeRestart = func() {
+		restartCalled = true
 	}
 
 	state := &pairingState{}
@@ -2333,14 +2341,27 @@ func TestManagementLogoutSignalsRelink(t *testing.T) {
 	if !logoutCalled {
 		t.Fatal("logout helper was not called")
 	}
+	if !restartCalled {
+		t.Fatal("logout did not request a bridge restart")
+	}
+	var body struct {
+		Success bool `json:"success"`
+		Restart bool `json:"restart"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode logout response: %v", err)
+	}
+	if !body.Success || !body.Restart {
+		t.Fatalf("unexpected logout response: %+v", body)
+	}
 	_, paired, jid, stateValue, _ := state.snapshot()
 	if paired || jid != "" || stateValue != "logged_out" {
 		t.Fatalf("unexpected state after logout: paired=%v jid=%q state=%q", paired, jid, stateValue)
 	}
 	select {
 	case <-relinkChan:
+		t.Fatal("logout must not request in-process relink")
 	default:
-		t.Fatal("logout did not request a relink")
 	}
 }
 
