@@ -2490,12 +2490,6 @@ func newRESTMuxWithClientGetter(getClient func() *whatsmeow.Client, messageStore
 	return mux
 }
 
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState, relinkChan chan<- bool) {
-	startRESTServerWithClientGetter(func() *whatsmeow.Client {
-		return client
-	}, messageStore, port, token, allowedMediaRoots, pairing, relinkChan)
-}
-
 func startRESTServerWithClientGetter(getClient func() *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState, relinkChan chan<- bool) {
 	handler := newRESTMuxWithClientGetter(getClient, messageStore, port, token, allowedMediaRoots, pairing, relinkChan)
 
