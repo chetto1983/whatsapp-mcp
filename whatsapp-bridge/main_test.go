@@ -2272,6 +2272,72 @@ func TestManagementQRRotatesAndClearsOnUnavailable(t *testing.T) {
 	}
 }
 
+func TestManagementLogoutSignalsRelink(t *testing.T) {
+	const token = "supersecrettoken1234567890abcdef"
+	origLogout := logoutWhatsAppClient
+	t.Cleanup(func() { logoutWhatsAppClient = origLogout })
+
+	logoutCalled := false
+	logoutWhatsAppClient = func(_ context.Context, client *whatsmeow.Client) error {
+		logoutCalled = true
+		if client.Store != nil {
+			client.Store.ID = nil
+		}
+		return nil
+	}
+
+	state := &pairingState{}
+	state.setPaired(phonePN.String())
+	relinkChan := make(chan bool, 1)
+	client := newTestClientWithSelf(&mockLIDStore{}, phonePN)
+	handler := newRESTMuxWithRelink(client, newTestMessageStore(t), 8080, token, nil, state, relinkChan)
+
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/logout", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !logoutCalled {
+		t.Fatal("logout helper was not called")
+	}
+	_, paired, jid, stateValue, _ := state.snapshot()
+	if paired || jid != "" || stateValue != "logged_out" {
+		t.Fatalf("unexpected state after logout: paired=%v jid=%q state=%q", paired, jid, stateValue)
+	}
+	select {
+	case <-relinkChan:
+	default:
+		t.Fatal("logout did not request a relink")
+	}
+}
+
+func TestManagementLogoutWhileWaitingQRKeepsQRCode(t *testing.T) {
+	const token = "supersecrettoken1234567890abcdef"
+	state := &pairingState{}
+	state.setQR("active-code")
+	relinkChan := make(chan bool, 1)
+	handler := newRESTMuxWithRelink(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, state, relinkChan)
+
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/logout", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	qr, paired, _, stateValue, _ := state.snapshot()
+	if paired || qr != "active-code" || stateValue != "waiting_qr" {
+		t.Fatalf("unexpected state after unpaired logout: paired=%v qr=%q state=%q", paired, qr, stateValue)
+	}
+	select {
+	case <-relinkChan:
+		t.Fatal("unpaired logout should not request relink")
+	default:
+	}
+}
+
 func TestSendHandlerNoAuthStillReturns401(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
 	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
