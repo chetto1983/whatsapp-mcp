@@ -5,7 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from mcp_config import resolve_host, resolve_port, resolve_transport
+from mcp_config import resolve_host, resolve_port, resolve_transport, resolve_transport_security
 from whatsapp import (
     download_media as whatsapp_download_media,
 )
@@ -432,6 +432,11 @@ if __name__ == "__main__":
         if transport != "stdio":
             mcp.settings.host = resolve_host(os.getenv("WHATSAPP_MCP_HOST"))
             mcp.settings.port = resolve_port(os.getenv("WHATSAPP_MCP_PORT"))
+            mcp.settings.transport_security = resolve_transport_security(
+                mcp.settings.host,
+                allowed_hosts=os.getenv("WHATSAPP_MCP_ALLOWED_HOSTS"),
+                allowed_origins=os.getenv("WHATSAPP_MCP_ALLOWED_ORIGINS"),
+            )
             # stdout is reserved for the protocol on stdio; log startup to stderr.
             print(
                 f"WhatsApp MCP server listening on {mcp.settings.host}:{mcp.settings.port} via {transport}",

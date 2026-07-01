@@ -42,6 +42,8 @@ ENV WHATSMEOW_DB_PATH=/app/whatsapp-bridge/store/whatsapp.db
 ENV WHATSAPP_MCP_TRANSPORT=http
 ENV WHATSAPP_MCP_HOST=0.0.0.0
 ENV WHATSAPP_MCP_PORT=8080
+ENV WHATSAPP_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,whatsapp:*,aura-whatsapp:*
+ENV WHATSAPP_MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,http://[::1]:*,http://whatsapp:*,http://aura-whatsapp:*
 
 EXPOSE 8080 8081
 
