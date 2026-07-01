@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - aura/verygoodplugins-fusion
       - aura/cockpit-connect
     paths:
