@@ -218,7 +218,7 @@ func TestSendHandlerLogsCallerBeforeDecode(t *testing.T) {
 		_ = readPipe.Close()
 	})
 
-	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil)
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/send", strings.NewReader("{"))
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -2127,7 +2127,7 @@ func TestHandleMessage_ReactionWithoutKey_NotStored(t *testing.T) {
 // handler returns 400 when recipient or message_id is absent.
 func TestReactHandler_MissingFields_Returns400(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
-	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil)
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
 
 	cases := []struct {
 		name string
@@ -2155,7 +2155,7 @@ func TestReactHandler_MissingFields_Returns400(t *testing.T) {
 
 func TestReactHandler_GroupReactionMissingSenderJID_Returns400(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
-	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil)
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
 
 	body := `{"recipient":"120363012345678901@g.us","message_id":"3AABCDEF01234567","emoji":"👍","from_me":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/react", strings.NewReader(body))
@@ -2172,7 +2172,7 @@ func TestReactHandler_GroupReactionMissingSenderJID_Returns400(t *testing.T) {
 
 func TestReactHandler_GroupReactionInvalidSenderJID_Returns400(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
-	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil)
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
 
 	body := `{"recipient":"120363012345678901@g.us","message_id":"3AABCDEF01234567","emoji":"👍","from_me":false,"sender_jid":"@s.whatsapp.net"}`
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/react", strings.NewReader(body))
@@ -2191,7 +2191,7 @@ func TestReactHandler_GroupReactionInvalidSenderJID_Returns400(t *testing.T) {
 // rejects requests that do not carry a valid bearer token.
 func TestReactHandler_NoAuth_Returns401(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
-	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil)
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
 
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/react",
 		strings.NewReader(`{"recipient":"15551234567@s.whatsapp.net","message_id":"3AABCDEF01234567","emoji":"👍"}`))
@@ -2202,6 +2202,88 @@ func TestReactHandler_NoAuth_Returns401(t *testing.T) {
 
 	if resp.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401 without auth, got %d", resp.Code)
+	}
+}
+
+func TestManagementStatusUnauthenticated(t *testing.T) {
+	const token = "supersecrettoken1234567890abcdef"
+	state := &pairingState{}
+	state.setQR("qr-code")
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, state)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/status", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	var got struct {
+		State       string `json:"state"`
+		Paired      bool   `json:"paired"`
+		QRAvailable bool   `json:"qr_available"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.State != "waiting_qr" || got.Paired || !got.QRAvailable {
+		t.Fatalf("unexpected status response: %+v", got)
+	}
+}
+
+func TestManagementQRRotatesAndClearsOnUnavailable(t *testing.T) {
+	const token = "supersecrettoken1234567890abcdef"
+	state := &pairingState{}
+	state.setQR("first-code")
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, state)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/qr", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	var qrResp struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&qrResp); err != nil {
+		t.Fatalf("decode qr response: %v", err)
+	}
+	if qrResp.Code != "first-code" {
+		t.Fatalf("code = %q, want first-code", qrResp.Code)
+	}
+
+	state.setUnavailable("qr_timeout", "QR code timed out")
+	req = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/qr", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 after QR expiry, got %d", resp.Code)
+	}
+	var errResp struct {
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.State != "qr_timeout" || errResp.Error == "" {
+		t.Fatalf("unexpected error response: %+v", errResp)
+	}
+}
+
+func TestSendHandlerNoAuthStillReturns401(t *testing.T) {
+	const token = "supersecrettoken1234567890abcdef"
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
+
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/send",
+		strings.NewReader(`{"recipient":"15551234567","message":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", resp.Code)
 	}
 }
 
@@ -2335,7 +2417,7 @@ func TestHandleMessage_PlainMessage_QuotedIDIsNull(t *testing.T) {
 // path when recipient is empty — complements the quoted-reply handler path.
 func TestSendHandler_QuotedReplyFields_PassedThrough(t *testing.T) {
 	const token = "supersecrettoken1234567890abcdef"
-	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil)
+	handler := newRESTMux(newTestClient(&mockLIDStore{}), newTestMessageStore(t), 8080, token, nil, &pairingState{})
 
 	// POST with quoted_message_id but no recipient — should 400 before
 	// any send attempt, proving the new fields are parsed.

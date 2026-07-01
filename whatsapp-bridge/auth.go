@@ -2,9 +2,9 @@ package main
 
 // Bridge authentication and request validation.
 //
-// The REST listener binds to 127.0.0.1, but loopback is not a meaningful
-// trust boundary on a developer workstation: any local process or browser
-// tab (via DNS rebinding) can issue requests. We add two layers:
+// The REST listener binds to 127.0.0.1 by default. The Aura sidecar may set
+// WHATSAPP_BRIDGE_HOST=0.0.0.0 for inter-container access, so loopback is not
+// treated as a meaningful trust boundary. We add two layers:
 //
 //  1. Bearer-token auth. A 256-bit token is generated at first start and
 //     stored at store/.bridge-token (mode 0600). The MCP server reads it

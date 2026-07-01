@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1934,21 +1935,176 @@ func extractDirectPathFromURL(url string) string {
 	return "/" + parts[1]
 }
 
+// pairingState is the bridge's connection/pairing snapshot. Aura's cockpit
+// reads it via the unauthenticated management endpoints while the protected
+// message endpoints remain bearer-token gated.
+type pairingState struct {
+	mu        sync.RWMutex
+	qrCode    string
+	paired    bool
+	jid       string
+	state     string
+	lastError string
+}
+
+func (s *pairingState) setQR(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.qrCode = code
+	s.paired = false
+	s.state = "waiting_qr"
+	s.lastError = ""
+}
+
+func (s *pairingState) setPaired(jid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.qrCode = ""
+	s.paired = true
+	s.jid = jid
+	s.state = "connected"
+	s.lastError = ""
+}
+
+func (s *pairingState) setLoggedOut() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.qrCode = ""
+	s.paired = false
+	s.jid = ""
+	s.state = "logged_out"
+	s.lastError = ""
+}
+
+func (s *pairingState) setUnavailable(state, err string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.qrCode = ""
+	s.paired = false
+	s.state = state
+	s.lastError = err
+}
+
+func (s *pairingState) snapshot() (qr string, paired bool, jid string, state string, lastError string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.qrCode, s.paired, s.jid, s.state, s.lastError
+}
+
+func pairingSnapshot(state *pairingState, client *whatsmeow.Client) map[string]any {
+	qr, paired, jid, stateValue, lastError := state.snapshot()
+	if stateValue == "" {
+		switch {
+		case paired:
+			stateValue = "connected"
+		case qr != "":
+			stateValue = "waiting_qr"
+		default:
+			stateValue = "initializing"
+		}
+	}
+	status := map[string]any{
+		"state":        stateValue,
+		"paired":       paired,
+		"jid":          jid,
+		"connected":    client.IsConnected(),
+		"qr_available": qr != "",
+	}
+	if lastError != "" {
+		status["error"] = lastError
+	}
+	return status
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, payload map[string]any) {
+	w.Header().Set("Content-Type", "application/json")
+	if statusCode != http.StatusOK {
+		w.WriteHeader(statusCode)
+	}
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func bridgePort() (int, error) {
+	port := 8080
+	if p := strings.TrimSpace(os.Getenv("WHATSAPP_BRIDGE_PORT")); p != "" {
+		v, err := strconv.Atoi(p)
+		if err != nil || v < 1 || v > 65535 {
+			return 0, fmt.Errorf("invalid WHATSAPP_BRIDGE_PORT=%q, must be 1-65535", p)
+		}
+		port = v
+	}
+	return port, nil
+}
+
+func bridgeHost() string {
+	if host := strings.TrimSpace(os.Getenv("WHATSAPP_BRIDGE_HOST")); host != "" {
+		return host
+	}
+	return "127.0.0.1"
+}
+
 // Start a REST API server to expose the WhatsApp client functionality.
 //
-// Auth: every handler is wrapped in withAuth, which enforces both a
-// bearer-token check and a Host-header allow-list (loopback only). See
-// auth.go for the rationale.
+// Auth: message/action handlers are wrapped in withAuth, which enforces both a
+// bearer-token check and a Host-header allow-list (loopback only). The
+// management endpoints are intentionally unauthenticated for Aura's already
+// gated cockpit proxy.
 //
 // Outbound media: req.MediaPath in /api/send is validated against
 // allowedMediaRoots before sendWhatsAppMessage ever sees it. See
 // media_path.go.
-func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string) *http.ServeMux {
+func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState) *http.ServeMux {
 	allowedHosts := buildAllowedHosts(port)
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
 		return withAuth(token, allowedHosts, h)
 	}
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, http.StatusOK, pairingSnapshot(pairing, client))
+	})
+
+	mux.HandleFunc("/api/qr", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		qr, paired, _, stateValue, lastError := pairing.snapshot()
+		if paired {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "already paired", "state": "connected"})
+			return
+		}
+		if qr == "" {
+			if stateValue == "" {
+				stateValue = "initializing"
+			}
+			if lastError == "" {
+				lastError = "qr not ready"
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": lastError, "state": stateValue})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": qr, "state": "waiting_qr"})
+	})
+
+	mux.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if client.Store != nil && client.Store.ID != nil {
+			if err := client.Logout(context.Background()); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": err.Error()})
+				return
+			}
+		}
+		pairing.setLoggedOut()
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	})
 
 	// Health check endpoint
 	mux.HandleFunc("/api/health", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -2228,12 +2384,12 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, port int, 
 	return mux
 }
 
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string) {
-	handler := newRESTMux(client, messageStore, port, token, allowedMediaRoots)
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int, token string, allowedMediaRoots []string, pairing *pairingState) {
+	handler := newRESTMux(client, messageStore, port, token, allowedMediaRoots, pairing)
 
-	// Start the server with proper timeouts. Bind to loopback so the bridge is
-	// not reachable from the LAN; MCP clients talk to it over localhost.
-	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	// Start the server with proper timeouts. Bind to loopback by default; the
+	// Docker sidecar sets WHATSAPP_BRIDGE_HOST=0.0.0.0 for inter-container use.
+	serverAddr := fmt.Sprintf("%s:%d", bridgeHost(), port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
 
 	// Create server with timeouts for stability
@@ -2343,6 +2499,34 @@ func main() {
 		return
 	}
 
+	state := &pairingState{}
+
+	port, portErr := bridgePort()
+	if portErr != nil {
+		logger.Errorf("%v", portErr)
+		return
+	}
+
+	// Load (or generate on first run) the bearer token used to authenticate
+	// REST callers, and resolve the allow-listed roots that media_path values
+	// in /api/send must live under. See auth.go and media_path.go for the
+	// rationale.
+	bridgeToken, fresh, tokErr := loadOrCreateBridgeToken()
+	if tokErr != nil {
+		logger.Errorf("Failed to initialize bridge token: %v", tokErr)
+		return
+	}
+	if fresh {
+		printTokenBanner(bridgeToken, port)
+	}
+
+	allowedMediaRoots, mrErr := resolveMediaRoots()
+	if mrErr != nil {
+		logger.Errorf("Failed to resolve media roots: %v", mrErr)
+		return
+	}
+	logger.Infof("Allowed media roots: %v", allowedMediaRoots)
+
 	// Channel to signal reconnection needs
 	reconnectChan := make(chan bool, 1)
 
@@ -2407,12 +2591,17 @@ func main() {
 			}
 
 		case *events.Connected:
+			if client.Store != nil && client.Store.ID != nil {
+				state.setPaired(client.Store.ID.String())
+			}
 			logger.Infof("✓ Successfully connected to WhatsApp servers")
 
 		case *events.LoggedOut:
+			state.setLoggedOut()
 			logger.Warnf("⚠️  Device logged out, please scan QR code to log in again")
 
 		case *events.Disconnected:
+			state.setUnavailable("disconnected", "disconnected from WhatsApp servers")
 			logger.Warnf("⚠️  Disconnected from WhatsApp servers, will attempt reconnection...")
 			// Signal reconnection needed
 			select {
@@ -2422,6 +2611,7 @@ func main() {
 			}
 
 		case *events.ConnectFailure:
+			state.setUnavailable("connect_failure", fmt.Sprint(v.Reason))
 			logger.Errorf("❌ Connection failure: %v", v.Reason)
 			// Signal reconnection needed
 			select {
@@ -2430,6 +2620,7 @@ func main() {
 			}
 
 		case *events.StreamError:
+			state.setUnavailable("stream_error", fmt.Sprint(v.Code))
 			logger.Errorf("❌ Stream error: %v", v.Code)
 			// Signal reconnection needed
 			select {
@@ -2438,6 +2629,7 @@ func main() {
 			}
 
 		case *events.StreamReplaced:
+			state.setUnavailable("stream_replaced", "stream replaced by another WhatsApp session")
 			// Another WhatsApp Web session took our slot. whatsmeow treats this
 			// as a "permanent" disconnect and suppresses the Disconnected event,
 			// so we must handle it explicitly. Wait briefly to avoid ping-ponging
@@ -2452,32 +2644,30 @@ func main() {
 			}()
 
 		case *events.ClientOutdated:
+			state.setUnavailable("client_outdated", "whatsmeow client outdated")
 			logger.Errorf("❌ Client outdated - please update whatsmeow library")
 		}
 	})
 
-	// Create channel to track connection success
-	connected := make(chan bool, 1)
+	startRESTServer(client, messageStore, port, bridgeToken, allowedMediaRoots, state)
 
-	// Add connection retry logic
-	maxRetries := 3
+	// Add connection retry logic. The REST management API stays up while this
+	// loop rotates QR codes, so Aura can keep polling until the user links.
 	var connErr error
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		logger.Infof("Connection attempt %d/%d...", attempt, maxRetries)
+	for attempt := 1; ; attempt++ {
+		logger.Infof("Connection attempt %d...", attempt)
 
 		// Connect to WhatsApp
 		if client.Store.ID == nil {
 			// No ID stored, this is a new client, need to pair with phone
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
 
 			qrChan, connErr := client.GetQRChannel(ctx)
 			if connErr != nil {
 				logger.Errorf("Failed to get QR channel: %v", connErr)
-				if attempt == maxRetries {
-					return
-				}
+				state.setUnavailable("qr_channel_error", connErr.Error())
+				cancel()
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -2485,58 +2675,88 @@ func main() {
 			connErr = client.Connect()
 			if connErr != nil {
 				logger.Errorf("Failed to connect (attempt %d): %v", attempt, connErr)
-				if attempt == maxRetries {
-					return
-				}
+				state.setUnavailable("connect_failure", connErr.Error())
+				cancel()
 				time.Sleep(5 * time.Second)
 				continue
 			}
 
 			// Print QR code for pairing with phone
-			qrCodeShown := false
+			qrSuccess := false
+			terminalState := ""
+			terminalErr := ""
 			for evt := range qrChan {
-				if evt.Event == "code" {
-					if !qrCodeShown {
-						fmt.Println("\nScan this QR code with your WhatsApp app:")
-						qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-						fmt.Println("\nWaiting for QR code scan...")
-						qrCodeShown = true
+				done := false
+				switch evt.Event {
+				case "code":
+					state.setQR(evt.Code)
+					fmt.Println("\nScan this QR code with your WhatsApp app:")
+					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+					fmt.Println("\nWaiting for QR code scan...")
+				case "success":
+					qrSuccess = true
+					if client.Store != nil && client.Store.ID != nil {
+						state.setPaired(client.Store.ID.String())
 					}
-				} else if evt.Event == "success" {
-					connected <- true
-					break
-				} else if evt.Event == "timeout" {
-					logger.Warnf("QR code timed out")
+					done = true
+				case "timeout":
+					terminalState = "qr_timeout"
+					terminalErr = "QR code timed out"
+					done = true
+				case "err-client-outdated":
+					terminalState = "client_outdated"
+					terminalErr = "WhatsApp client outdated"
+					done = true
+				case "err-scanned-without-multidevice":
+					terminalState = "qr_scanned_without_multidevice"
+					terminalErr = "QR was scanned without multi-device support"
+					done = true
+				case "err-unexpected-state":
+					terminalState = "unexpected_pairing_state"
+					terminalErr = "unexpected WhatsApp pairing state"
+					done = true
+				case "error":
+					terminalState = "pairing_error"
+					if evt.Error != nil {
+						terminalErr = evt.Error.Error()
+					} else {
+						terminalErr = "WhatsApp pairing error"
+					}
+					done = true
+				default:
+					logger.Warnf("Unhandled QR channel event: %s", evt.Event)
+				}
+				if done {
 					break
 				}
 			}
 
-			// Wait for connection with timeout
-			select {
-			case <-connected:
+			cancel()
+			if qrSuccess {
 				fmt.Println("\nSuccessfully connected and authenticated!")
 				goto connectionSuccess
-			case <-ctx.Done():
-				logger.Errorf("Timeout waiting for QR code scan (attempt %d)", attempt)
-				client.Disconnect()
-				if attempt == maxRetries {
-					return
-				}
-				time.Sleep(10 * time.Second)
-				continue
 			}
+			if terminalState == "" {
+				terminalState = "qr_channel_closed"
+				terminalErr = "QR channel closed before pairing succeeded"
+			}
+			logger.Warnf("%s: %s", terminalState, terminalErr)
+			state.setUnavailable(terminalState, terminalErr)
+			client.Disconnect()
+			time.Sleep(5 * time.Second)
+			continue
 		} else {
 			// Already logged in, just connect
 			connErr = client.Connect()
 			if connErr != nil {
 				logger.Errorf("Failed to connect (attempt %d): %v", attempt, connErr)
-				if attempt == maxRetries {
-					return
-				}
+				state.setUnavailable("connect_failure", connErr.Error())
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			connected <- true
+			if client.Store.ID != nil {
+				state.setPaired(client.Store.ID.String())
+			}
 			break
 		}
 	}
@@ -2548,43 +2768,14 @@ connectionSuccess:
 
 	if !client.IsConnected() {
 		logger.Errorf("Failed to establish stable connection")
+		state.setUnavailable("disconnected", "failed to establish stable connection")
 		return
+	}
+	if client.Store != nil && client.Store.ID != nil {
+		state.setPaired(client.Store.ID.String())
 	}
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
-
-	// Start REST API server
-	port := 8080
-	if p := os.Getenv("WHATSAPP_BRIDGE_PORT"); p != "" {
-		v, err := strconv.Atoi(p)
-		if err != nil || v < 1 || v > 65535 {
-			logger.Errorf("Invalid WHATSAPP_BRIDGE_PORT=%q, must be 1-65535", p)
-			return
-		}
-		port = v
-	}
-
-	// Load (or generate on first run) the bearer token used to authenticate
-	// REST callers, and resolve the allow-listed roots that media_path values
-	// in /api/send must live under. See auth.go and media_path.go for the
-	// rationale.
-	bridgeToken, fresh, tokErr := loadOrCreateBridgeToken()
-	if tokErr != nil {
-		logger.Errorf("Failed to initialize bridge token: %v", tokErr)
-		return
-	}
-	if fresh {
-		printTokenBanner(bridgeToken, port)
-	}
-
-	allowedMediaRoots, mrErr := resolveMediaRoots()
-	if mrErr != nil {
-		logger.Errorf("Failed to resolve media roots: %v", mrErr)
-		return
-	}
-	logger.Infof("Allowed media roots: %v", allowedMediaRoots)
-
-	startRESTServer(client, messageStore, port, bridgeToken, allowedMediaRoots)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
@@ -2609,6 +2800,7 @@ connectionSuccess:
 				if !client.IsConnected() {
 					err := client.Connect()
 					if err != nil {
+						state.setUnavailable("connect_failure", err.Error())
 						logger.Errorf("❌ Reconnection failed: %v", err)
 						// Increase backoff for next attempt
 						reconnectBackoff = reconnectBackoff * 2
@@ -2621,6 +2813,9 @@ connectionSuccess:
 						default:
 						}
 					} else {
+						if client.Store != nil && client.Store.ID != nil {
+							state.setPaired(client.Store.ID.String())
+						}
 						logger.Infof("✓ Reconnected successfully")
 						// Reset backoff on successful connection
 						reconnectBackoff = time.Second * 5
