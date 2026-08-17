@@ -3215,6 +3215,57 @@ func handleCallOffer(client *whatsmeow.Client, messageStore *MessageStore, meta 
 		kind, direction, meta.CallID, callType, fromJID, chatJID)
 }
 
+// historyRow is one decoded history-sync message, held until its whole
+// conversation has been scanned. Buffering is what lets the chat's
+// last_message_time be derived from the rows that will actually land.
+type historyRow struct {
+	id            string
+	sender        string
+	content       string
+	timestamp     time.Time
+	isFromMe      bool
+	mediaType     string
+	filename      string
+	url           string
+	mediaKey      []byte
+	fileSHA256    []byte
+	fileEncSHA256 []byte
+	fileLength    uint64
+}
+
+// unwrapHistoryMessage peels the envelopes a history-sync row can arrive in.
+//
+// whatsmeow unwraps these itself before handing over an events.Message, but
+// HistorySync carries the raw WebMessageInfo — so a disappearing, view-once or
+// own-device message reaches this bridge still wrapped, every content getter on
+// the envelope returns "", and the row is dropped at the content gate as if it
+// were empty. The loop is bounded because envelopes legitimately nest (a
+// view-once inside an ephemeral is ordinary) but a malformed cycle must not be
+// able to hang a sync.
+func unwrapHistoryMessage(msg *waProto.Message) *waProto.Message {
+	for i := 0; i < 8; i++ {
+		switch {
+		case msg == nil:
+			return nil
+		case msg.GetDeviceSentMessage().GetMessage() != nil:
+			msg = msg.GetDeviceSentMessage().GetMessage()
+		case msg.GetEphemeralMessage().GetMessage() != nil:
+			msg = msg.GetEphemeralMessage().GetMessage()
+		case msg.GetViewOnceMessage().GetMessage() != nil:
+			msg = msg.GetViewOnceMessage().GetMessage()
+		case msg.GetViewOnceMessageV2().GetMessage() != nil:
+			msg = msg.GetViewOnceMessageV2().GetMessage()
+		case msg.GetViewOnceMessageV2Extension().GetMessage() != nil:
+			msg = msg.GetViewOnceMessageV2Extension().GetMessage()
+		case msg.GetDocumentWithCaptionMessage().GetMessage() != nil:
+			msg = msg.GetDocumentWithCaptionMessage().GetMessage()
+		default:
+			return msg
+		}
+	}
+	return msg
+}
+
 func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, historySync *events.HistorySync, logger waLog.Logger) {
 	// Log every history sync event with its shape. Different sync types
 	// carry different payloads; logging type/chunk/progress makes it easy
@@ -3251,144 +3302,156 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 		// Get appropriate chat name by passing the history sync conversation directly
 		name := GetChatName(client, messageStore, resolved, chatJID, conversation, "", logger)
 
-		// Process messages
-		messages := conversation.Messages
-		if len(messages) > 0 {
-			// Update chat with latest message timestamp
-			latestMsg := messages[0]
-			if latestMsg == nil || latestMsg.Message == nil {
+		// Decode what this conversation actually contributes BEFORE writing the
+		// chat, so last_message_time is set from what stored rather than from what
+		// arrived. A history-sync chunk can be entirely reactions, protocol
+		// messages or types this bridge does not decode; writing the header first
+		// advertised activity that list_messages could not show — the same defect
+		// RefreshChatName documents on the live path, left unfixed on this one.
+		// Measured 2026-08-17: 56 of 113 stored chats carried a timestamp with no
+		// message row behind it.
+		rows := make([]historyRow, 0, len(conversation.Messages))
+		for _, msg := range conversation.Messages {
+			if msg == nil || msg.Message == nil {
 				continue
 			}
 
-			// Get timestamp from message info
-			ts := latestMsg.Message.GetMessageTimestamp()
+			ts := msg.Message.GetMessageTimestamp()
 			if ts == 0 {
 				continue
 			}
-			timestamp := time.Unix(int64(ts), 0)
+			msgTimestamp := time.Unix(int64(ts), 0)
 
-			_ = messageStore.StoreChat(chatJID, name, timestamp)
-			if err := messageStore.UpdateChatEphemeralSettings(
-				chatJID,
-				conversation.GetEphemeralExpiration(),
-				conversation.GetEphemeralSettingTimestamp(),
-			); err != nil {
-				logger.Warnf("Failed to store history sync ephemeral settings for %s: %v", chatJID, err)
+			msgID := ""
+			if msg.Message.Key != nil && msg.Message.Key.ID != nil {
+				msgID = *msg.Message.Key.ID
 			}
 
-			// Store messages
-			for _, msg := range messages {
-				if msg == nil || msg.Message == nil {
-					continue
+			payload := unwrapHistoryMessage(msg.Message.Message)
+
+			// extractTextContent, not a second inline copy of it: captions,
+			// hydrated templates and button/interactive bodies all count as
+			// content, and the copy that used to live here disagreed silently.
+			content := extractTextContent(payload)
+
+			var mediaType, filename, url string
+			var mediaKey, fileSHA256, fileEncSHA256 []byte
+			var fileLength uint64
+			if payload != nil {
+				// The message's OWN timestamp: passing the conversation's newest
+				// gave every media file in a chat the same name stem, which is the
+				// opposite of the unique filenames it was passed for.
+				mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength = extractMediaInfo(payload, msgTimestamp, msgID)
+			}
+
+			// Skip messages with no content and no media
+			if content == "" && mediaType == "" {
+				continue
+			}
+
+			// Determine sender. History-sync rows do not carry SenderAlt,
+			// so any LID-based participant is resolved through the
+			// whatsmeow LID store (populated during live message handling).
+			var sender string
+			isFromMe := false
+			if msg.Message.Key != nil {
+				if msg.Message.Key.FromMe != nil {
+					isFromMe = *msg.Message.Key.FromMe
 				}
-
-				// Extract text content
-				var content string
-				if msg.Message.Message != nil {
-					if conv := msg.Message.Message.GetConversation(); conv != "" {
-						content = conv
-					} else if ext := msg.Message.Message.GetExtendedTextMessage(); ext != nil {
-						content = ext.GetText()
-					}
-				}
-
-				// Extract media info - pass message timestamp + ID for unique filenames
-				var mediaType, filename, url string
-				var mediaKey, fileSHA256, fileEncSHA256 []byte
-				var fileLength uint64
-
-				histMsgID := ""
-				if msg.Message != nil && msg.Message.Key != nil && msg.Message.Key.ID != nil {
-					histMsgID = *msg.Message.Key.ID
-				}
-
-				if msg.Message.Message != nil {
-					mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength = extractMediaInfo(msg.Message.Message, timestamp, histMsgID)
-				}
-
-				// Log the message content for debugging
-				logger.Infof("Message content: %v, Media Type: %v", content, mediaType)
-
-				// Skip messages with no content and no media
-				if content == "" && mediaType == "" {
-					continue
-				}
-
-				// Determine sender. History-sync rows do not carry SenderAlt,
-				// so any LID-based participant is resolved through the
-				// whatsmeow LID store (populated during live message handling).
-				var sender string
-				isFromMe := false
-				if msg.Message.Key != nil {
-					if msg.Message.Key.FromMe != nil {
-						isFromMe = *msg.Message.Key.FromMe
-					}
-					var rawSender types.JID
-					switch {
-					case isFromMe && client.Store.ID != nil:
-						rawSender = client.Store.ID.ToNonAD()
-					case msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "":
-						if parsed, perr := types.ParseJID(*msg.Message.Key.Participant); perr == nil {
-							rawSender = parsed
-						} else {
-							rawSender = types.JID{User: *msg.Message.Key.Participant}
-						}
-					default:
-						rawSender = jid
-					}
-					var alt types.JID
-					if isFromMe && client.Store.ID != nil {
-						alt = client.Store.ID.ToNonAD()
-					}
-					sender = resolveUserJID(client, rawSender, alt).User
-				} else {
-					sender = jid.User
-				}
-
-				// Store message
-				msgID := ""
-				if msg.Message.Key != nil && msg.Message.Key.ID != nil {
-					msgID = *msg.Message.Key.ID
-				}
-
-				// Get message timestamp
-				ts := msg.Message.GetMessageTimestamp()
-				if ts == 0 {
-					continue
-				}
-				msgTimestamp := time.Unix(int64(ts), 0)
-
-				err = messageStore.StoreMessage(
-					msgID,
-					chatJID,
-					sender,
-					content,
-					msgTimestamp,
-					isFromMe,
-					mediaType,
-					filename,
-					url,
-					mediaKey,
-					fileSHA256,
-					fileEncSHA256,
-					fileLength,
-					"", // quoted_message_id: history sync does not carry ContextInfo
-				)
-				if err != nil {
-					logger.Warnf("Failed to store history message: %v", err)
-				} else {
-					syncedCount++
-					// Log successful message storage
-					if mediaType != "" {
-						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
-							msgTimestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)
+				var rawSender types.JID
+				switch {
+				case isFromMe && client.Store.ID != nil:
+					rawSender = client.Store.ID.ToNonAD()
+				case msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "":
+					if parsed, perr := types.ParseJID(*msg.Message.Key.Participant); perr == nil {
+						rawSender = parsed
 					} else {
-						logger.Infof("Stored message: [%s] %s -> %s: %s",
-							msgTimestamp.Format("2006-01-02 15:04:05"), sender, chatJID, content)
+						rawSender = types.JID{User: *msg.Message.Key.Participant}
 					}
+				default:
+					rawSender = jid
 				}
+				var alt types.JID
+				if isFromMe && client.Store.ID != nil {
+					alt = client.Store.ID.ToNonAD()
+				}
+				sender = resolveUserJID(client, rawSender, alt).User
+			} else {
+				sender = jid.User
+			}
+
+			rows = append(rows, historyRow{
+				id:            msgID,
+				sender:        sender,
+				content:       content,
+				timestamp:     msgTimestamp,
+				isFromMe:      isFromMe,
+				mediaType:     mediaType,
+				filename:      filename,
+				url:           url,
+				mediaKey:      mediaKey,
+				fileSHA256:    fileSHA256,
+				fileEncSHA256: fileEncSHA256,
+				fileLength:    fileLength,
+			})
+		}
+
+		if len(rows) == 0 {
+			// Keep a name this sync taught us, but never mint a chat row whose
+			// history is empty: RefreshChatName updates in place and creates
+			// nothing.
+			if err := messageStore.RefreshChatName(chatJID, name); err != nil {
+				logger.Warnf("Failed to refresh chat name for %s: %v", chatJID, err)
+			}
+			continue
+		}
+
+		newest := rows[0].timestamp
+		for _, row := range rows[1:] {
+			if row.timestamp.After(newest) {
+				newest = row.timestamp
 			}
 		}
+
+		// The chat row goes first regardless: messages.chat_jid references chats(jid).
+		if err := messageStore.StoreChat(chatJID, name, newest); err != nil {
+			logger.Warnf("Failed to store history sync chat %s: %v", chatJID, err)
+			continue
+		}
+		if err := messageStore.UpdateChatEphemeralSettings(
+			chatJID,
+			conversation.GetEphemeralExpiration(),
+			conversation.GetEphemeralSettingTimestamp(),
+		); err != nil {
+			logger.Warnf("Failed to store history sync ephemeral settings for %s: %v", chatJID, err)
+		}
+
+		stored := 0
+		for _, row := range rows {
+			if err := messageStore.StoreMessage(
+				row.id,
+				chatJID,
+				row.sender,
+				row.content,
+				row.timestamp,
+				row.isFromMe,
+				row.mediaType,
+				row.filename,
+				row.url,
+				row.mediaKey,
+				row.fileSHA256,
+				row.fileEncSHA256,
+				row.fileLength,
+				"", // quoted_message_id: history sync does not carry ContextInfo
+			); err != nil {
+				logger.Warnf("Failed to store history message %s in %s: %v", row.id, chatJID, err)
+				continue
+			}
+			stored++
+		}
+		syncedCount += stored
+		logger.Infof("Synced %d/%d messages for %s (newest %s)",
+			stored, len(conversation.Messages), chatJID, newest.Format("2006-01-02 15:04:05"))
 	}
 
 	fmt.Printf("History sync complete. Stored %d messages.\n", syncedCount)
