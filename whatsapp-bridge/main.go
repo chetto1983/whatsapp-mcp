@@ -614,6 +614,25 @@ func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time
 	return err
 }
 
+// RefreshChatName updates a chat's display name without touching
+// last_message_time, and without creating a row for a chat we have never
+// stored a message for.
+//
+// handleMessage runs for every inbound stanza, including the ones that carry
+// no user content at all — peer/appdata messages, protocol messages, key
+// distribution. Calling StoreChat for those bumped last_message_time on a chat
+// whose message row was never written, so list_chats advertised activity that
+// list_messages could not show, and a reader (a person, or an agent) concluded
+// the history had been lost. last_message_time must mean what its name says:
+// it advances only where a message row lands.
+func (store *MessageStore) RefreshChatName(jid, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	_, err := store.db.Exec(`UPDATE chats SET name = ? WHERE jid = ?`, name, jid)
+	return err
+}
+
 // UpdateChatEphemeralSettings records the chat's disappearing-message timer.
 // Writes are gated on settingTimestamp so that low-information events don't
 // clobber authoritative ones:
@@ -1551,10 +1570,11 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		}
 	}
 
-	// Update chat in database with the message timestamp (keeps last message time updated)
-	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
-	if err != nil {
-		logger.Warnf("Failed to store chat: %v", err)
+	// Refresh the display name now — the resolution above is the freshest we have —
+	// but leave last_message_time alone. This stanza may carry no content at all, and
+	// the chat's timestamp advances only where a message row is written (below).
+	if err := messageStore.RefreshChatName(chatJID, name); err != nil {
+		logger.Warnf("Failed to refresh chat name: %v", err)
 	}
 
 	updateChatEphemeralSettingsFromProtocolMessage(messageStore, chatJID, msg.Message, msg.Info.Timestamp.Unix(), logger)
@@ -1584,6 +1604,9 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		}
 		if reactedToID != "" {
 			emoji := reaction.GetText()
+			if err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp); err != nil {
+				logger.Warnf("Failed to store chat: %v", err)
+			}
 			if err := messageStore.StoreMessage(
 				msg.Info.ID, chatJID, sender, emoji,
 				msg.Info.Timestamp, msg.Info.IsFromMe,
@@ -1612,9 +1635,14 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		return
 	}
 
+	// This stanza does carry content, so the chat's last_message_time may now advance.
+	if err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp); err != nil {
+		logger.Warnf("Failed to store chat: %v", err)
+	}
+
 	// Store message in database first so that downloadMedia (which queries the DB
 	// by message ID) can find the row when we call it synchronously below.
-	err = messageStore.StoreMessage(
+	err := messageStore.StoreMessage(
 		msg.Info.ID,
 		chatJID,
 		sender,

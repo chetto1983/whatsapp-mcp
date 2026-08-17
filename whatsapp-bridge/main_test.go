@@ -541,6 +541,24 @@ func buildTextMessage(chat, sender, senderAlt, recipientAlt types.JID, isFromMe 
 	}
 }
 
+// contentlessStanza builds an inbound stanza carrying neither text nor media —
+// the shape of a peer/appdata or protocol message. WhatsApp delivers these
+// constantly and handleMessage sees every one of them.
+func contentlessStanza(chat types.JID, at time.Time, id string) *events.Message {
+	return &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:     chat,
+				Sender:   chat,
+				IsFromMe: false,
+			},
+			ID:        id,
+			Timestamp: at,
+		},
+		Message: &waProto.Message{},
+	}
+}
+
 // queryChat returns the chat JID and name, or empty strings if not found.
 func queryChat(ms *MessageStore, jid string) (name string, found bool) {
 	err := ms.db.QueryRow("SELECT name FROM chats WHERE jid = ?", jid).Scan(&name)
@@ -730,6 +748,87 @@ func TestHandleMessage_PhoneJID_Unaffected(t *testing.T) {
 
 	if count := queryMessageCount(ms, phonePN.String()); count != 1 {
 		t.Errorf("expected 1 message under phone JID %s, got %d", phonePN, count)
+	}
+}
+
+// --- last_message_time honesty ---
+//
+// handleMessage used to call StoreChat before it knew whether the stanza had any
+// content, so every peer/appdata message bumped last_message_time on a chat whose
+// message row was never written. list_chats then advertised activity list_messages
+// could not show, and a reader concluded the history had been lost. These guard the
+// invariant: last_message_time advances only where a message row lands.
+
+func TestHandleMessage_ContentlessStanzaLeavesNoChatRow(t *testing.T) {
+	client := newTestClient(&mockLIDStore{})
+	ms := newTestMessageStore(t)
+	logger := testLogger()
+
+	handleMessage(client, ms, contentlessStanza(phonePN, time.Now(), "peer-001"), logger)
+
+	if _, found := queryChatLastMessageTime(ms, phonePN.String()); found {
+		t.Error("a stanza with no content must not create a chat row")
+	}
+	if count := queryMessageCount(ms, phonePN.String()); count != 0 {
+		t.Errorf("expected 0 messages stored, got %d", count)
+	}
+}
+
+func TestHandleMessage_ContentlessStanzaDoesNotAdvanceLastMessageTime(t *testing.T) {
+	client := newTestClient(&mockLIDStore{})
+	ms := newTestMessageStore(t)
+	logger := testLogger()
+
+	spoken := buildTextMessage(phonePN, phonePN, types.EmptyJID, types.EmptyJID, false, "the last thing actually said")
+	spoken.Info.Timestamp = time.Now().Add(-time.Hour)
+	handleMessage(client, ms, spoken, logger)
+
+	before, found := queryChatLastMessageTime(ms, phonePN.String())
+	if !found {
+		t.Fatal("a message with content must create the chat row")
+	}
+
+	handleMessage(client, ms, contentlessStanza(phonePN, time.Now(), "peer-002"), logger)
+
+	after, _ := queryChatLastMessageTime(ms, phonePN.String())
+	if after != before {
+		t.Errorf("last_message_time moved from %q to %q on a stanza that stored no message", before, after)
+	}
+	if count := queryMessageCount(ms, phonePN.String()); count != 1 {
+		t.Errorf("expected the single spoken message, got %d", count)
+	}
+}
+
+func TestRefreshChatName_DoesNotCreateARowOrMoveTheTimestamp(t *testing.T) {
+	ms := newTestMessageStore(t)
+
+	if err := ms.RefreshChatName(phonePN.String(), "Rebecca"); err != nil {
+		t.Fatalf("refresh on a chat with no row: %v", err)
+	}
+	if _, found := queryChatLastMessageTime(ms, phonePN.String()); found {
+		t.Fatal("RefreshChatName must not fabricate a chat row")
+	}
+
+	if err := ms.StoreChat(phonePN.String(), "old name", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+	before, _ := queryChatLastMessageTime(ms, phonePN.String())
+
+	if err := ms.RefreshChatName(phonePN.String(), "Rebecca"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if name, found := queryChat(ms, phonePN.String()); !found || name != "Rebecca" {
+		t.Errorf("name = %q (found=%v), want Rebecca", name, found)
+	}
+	if after, _ := queryChatLastMessageTime(ms, phonePN.String()); after != before {
+		t.Errorf("last_message_time moved from %q to %q", before, after)
+	}
+
+	if err := ms.RefreshChatName(phonePN.String(), "   "); err != nil {
+		t.Fatalf("refresh with a blank name: %v", err)
+	}
+	if name, _ := queryChat(ms, phonePN.String()); name != "Rebecca" {
+		t.Errorf("a blank name clobbered the stored one: %q", name)
 	}
 }
 
