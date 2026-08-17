@@ -1,11 +1,24 @@
+"""The WhatsApp MCP server.
+
+Fourteen tools over the bridge's SQLite store and REST API. Two of them —
+`list_messages` and `list_chats` — are additionally bound to MCP Apps views
+(`apps_ui`), so a host that negotiated `io.modelcontextprotocol/ui` renders a
+transcript or a chat index instead of a wall of JSON. Every host receives the
+same tool payload either way.
+
+Env-var handling is deferred to the `__main__` block so importing this module
+never parses env vars or exits the process.
+"""
+
 import os
 import signal
 import sys
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-from mcp_config import resolve_host, resolve_port, resolve_transport, resolve_transport_security
+from apps_ui import CHATS_URI, THREAD_URI, build_apps, openai_alias
+from mcp_config import resolve_run_kwargs, resolve_transport
 from whatsapp import (
     download_media as whatsapp_download_media,
 )
@@ -52,9 +65,88 @@ from whatsapp import (
     send_reaction as whatsapp_send_reaction,
 )
 
-# Initialize FastMCP server. Env-var handling is deferred to the __main__ block
-# so importing this module never parses env vars or exits the process.
-mcp = FastMCP("whatsapp")
+# The view-bound tools are registered on the extension, and MCPServer consumes
+# the extension at construction — so they are declared BEFORE the server exists,
+# and the remaining tools after it. That ordering is a constraint of the
+# extension framework (SEP-2133), not a style choice.
+apps = build_apps()
+
+
+@apps.tool(resource_uri=THREAD_URI, meta=openai_alias(THREAD_URI))
+def list_messages(
+    after: str | None = None,
+    before: str | None = None,
+    sender_phone_number: str | None = None,
+    chat_jid: str | None = None,
+    query: str | None = None,
+    limit: int = 50,
+    page: int = 0,
+    include_context: bool = True,
+    context_before: int = 1,
+    context_after: int = 1,
+    sort_by: str = "newest",
+) -> list[dict[str, Any]]:
+    """Get WhatsApp messages matching specified criteria with optional context.
+
+    Each message includes sender_display showing "Name (phone)" for easy identification.
+
+    Args:
+        after: ISO-8601 date string (e.g., "2026-01-01" or "2026-01-01T09:00:00")
+        before: ISO-8601 date string (e.g., "2026-01-09" or "2026-01-09T18:00:00")
+        sender_phone_number: Phone number to filter by sender (e.g., "12025551234")
+        chat_jid: Chat JID to filter by (e.g., "12025551234@s.whatsapp.net" or group JID)
+        query: Search term to filter messages by content
+        limit: Max messages to return (default 50, max 500)
+        page: Page number for pagination (default 0)
+        include_context: Include surrounding messages for context (default True)
+        context_before: Messages to include before each match (default 1)
+        context_after: Messages to include after each match (default 1)
+        sort_by: "newest" (default, most recent first) or "oldest" (chronological)
+    """
+    # Cap limit at 500 to prevent excessive queries
+    limit = min(limit, 500)
+    messages = whatsapp_list_messages(
+        after=after,
+        before=before,
+        sender_phone_number=sender_phone_number,
+        chat_jid=chat_jid,
+        query=query,
+        limit=limit,
+        page=page,
+        include_context=include_context,
+        context_before=context_before,
+        context_after=context_after,
+        sort_by=sort_by,
+    )
+    return messages
+
+
+@apps.tool(resource_uri=CHATS_URI, meta=openai_alias(CHATS_URI))
+def list_chats(
+    query: str | None = None,
+    limit: int = 50,
+    page: int = 0,
+    include_last_message: bool = True,
+    sort_by: str = "last_active",
+) -> list[dict[str, Any]]:
+    """Get WhatsApp chats matching specified criteria.
+
+    Args:
+        query: Search term to filter chats by name or JID
+        limit: Max chats to return (default 50, max 200)
+        page: Page number for pagination (default 0)
+        include_last_message: Include the last message in each chat (default True)
+        sort_by: "last_active" (default, most recent first) or "name" (alphabetical)
+    """
+    # Cap limit at 200 to prevent excessive queries
+    limit = min(limit, 200)
+    chats = whatsapp_list_chats(
+        query=query, limit=limit, page=page, include_last_message=include_last_message, sort_by=sort_by
+    )
+    return chats
+
+
+mcp = MCPServer("whatsapp", extensions=[apps])
 
 
 @mcp.tool()
@@ -157,80 +249,6 @@ def get_contact(
         "is_lid": is_lid,
         "resolved": resolved,
     }
-
-
-@mcp.tool()
-def list_messages(
-    after: str | None = None,
-    before: str | None = None,
-    sender_phone_number: str | None = None,
-    chat_jid: str | None = None,
-    query: str | None = None,
-    limit: int = 50,
-    page: int = 0,
-    include_context: bool = True,
-    context_before: int = 1,
-    context_after: int = 1,
-    sort_by: str = "newest",
-) -> list[dict[str, Any]]:
-    """Get WhatsApp messages matching specified criteria with optional context.
-
-    Each message includes sender_display showing "Name (phone)" for easy identification.
-
-    Args:
-        after: ISO-8601 date string (e.g., "2026-01-01" or "2026-01-01T09:00:00")
-        before: ISO-8601 date string (e.g., "2026-01-09" or "2026-01-09T18:00:00")
-        sender_phone_number: Phone number to filter by sender (e.g., "12025551234")
-        chat_jid: Chat JID to filter by (e.g., "12025551234@s.whatsapp.net" or group JID)
-        query: Search term to filter messages by content
-        limit: Max messages to return (default 50, max 500)
-        page: Page number for pagination (default 0)
-        include_context: Include surrounding messages for context (default True)
-        context_before: Messages to include before each match (default 1)
-        context_after: Messages to include after each match (default 1)
-        sort_by: "newest" (default, most recent first) or "oldest" (chronological)
-    """
-    # Cap limit at 500 to prevent excessive queries
-    limit = min(limit, 500)
-    messages = whatsapp_list_messages(
-        after=after,
-        before=before,
-        sender_phone_number=sender_phone_number,
-        chat_jid=chat_jid,
-        query=query,
-        limit=limit,
-        page=page,
-        include_context=include_context,
-        context_before=context_before,
-        context_after=context_after,
-        sort_by=sort_by,
-    )
-    return messages
-
-
-@mcp.tool()
-def list_chats(
-    query: str | None = None,
-    limit: int = 50,
-    page: int = 0,
-    include_last_message: bool = True,
-    sort_by: str = "last_active",
-) -> list[dict[str, Any]]:
-    """Get WhatsApp chats matching specified criteria.
-
-    Args:
-        query: Search term to filter chats by name or JID
-        limit: Max chats to return (default 50, max 200)
-        page: Page number for pagination (default 0)
-        include_last_message: Include the last message in each chat (default True)
-        sort_by: "last_active" (default, most recent first) or "name" (alphabetical)
-    """
-    # Cap limit at 200 to prevent excessive queries
-    limit = min(limit, 200)
-    chats = whatsapp_list_chats(
-        query=query, limit=limit, page=page, include_last_message=include_last_message, sort_by=sort_by
-    )
-    return chats
 
 
 @mcp.tool()
@@ -429,20 +447,23 @@ if __name__ == "__main__":
     # The localhost default keeps a remote server unreachable until explicitly opened up.
     try:
         transport = resolve_transport(os.getenv("WHATSAPP_MCP_TRANSPORT"))
-        if transport != "stdio":
-            mcp.settings.host = resolve_host(os.getenv("WHATSAPP_MCP_HOST"))
-            mcp.settings.port = resolve_port(os.getenv("WHATSAPP_MCP_PORT"))
-            mcp.settings.transport_security = resolve_transport_security(
-                mcp.settings.host,
-                allowed_hosts=os.getenv("WHATSAPP_MCP_ALLOWED_HOSTS"),
-                allowed_origins=os.getenv("WHATSAPP_MCP_ALLOWED_ORIGINS"),
-            )
-            # stdout is reserved for the protocol on stdio; log startup to stderr.
-            print(
-                f"WhatsApp MCP server listening on {mcp.settings.host}:{mcp.settings.port} via {transport}",
-                file=sys.stderr,
-            )
+        run_kwargs = resolve_run_kwargs(
+            transport,
+            host=os.getenv("WHATSAPP_MCP_HOST"),
+            port=os.getenv("WHATSAPP_MCP_PORT"),
+            allowed_hosts=os.getenv("WHATSAPP_MCP_ALLOWED_HOSTS"),
+            allowed_origins=os.getenv("WHATSAPP_MCP_ALLOWED_ORIGINS"),
+            stateless=os.getenv("WHATSAPP_MCP_STATELESS"),
+        )
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
 
-    mcp.run(transport=transport)
+    if transport != "stdio":
+        # stdout is reserved for the protocol on stdio; log startup to stderr.
+        mode = "stateless" if run_kwargs.get("stateless_http") else "session-bearing"
+        print(
+            f"WhatsApp MCP server listening on {run_kwargs['host']}:{run_kwargs['port']} via {transport} ({mode})",
+            file=sys.stderr,
+        )
+
+    mcp.run(transport, **run_kwargs)

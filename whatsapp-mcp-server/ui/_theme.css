@@ -1,0 +1,206 @@
+/*
+ * The shared look for this server's Views: WhatsApp's own.
+ *
+ * A view of a WhatsApp conversation should look like the thing it shows, so the
+ * palette, the bubble geometry and the type are WhatsApp Web's. Every colour is
+ * a variable the host may override (ext-apps §Theming) — what follows is the
+ * fallback for a host that offers nothing.
+ *
+ * No images and no @font-face: a ui:// resource loads under a restrictive CSP
+ * (this server declares every domain list empty), so the wallpaper texture is
+ * gradients and the bubble tails are borders.
+ */
+
+:root {
+  --wa-bg: #efeae2;
+  --wa-panel: #f0f2f5;
+  --wa-in: #ffffff;
+  --wa-out: #d9fdd3;
+  --wa-text: #111b21;
+  --wa-muted: #667781;
+  --wa-divider: #e9edef;
+  --wa-accent: #00a884;
+  --wa-author: #06cf9c;
+  --wa-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  --wa-pill: #ffffff;
+
+  --color-background-primary: var(--wa-bg);
+  --color-background-secondary: var(--wa-panel);
+  --color-text-primary: var(--wa-text);
+  --color-text-secondary: var(--wa-muted);
+  --color-border-primary: var(--wa-divider);
+
+  --font-wa: "Segoe UI", "Helvetica Neue", Helvetica, "Lucida Grande", system-ui, sans-serif;
+
+  --safe-top: 0px;
+  --safe-right: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wa-bg: #0b141a;
+    --wa-panel: #202c33;
+    --wa-in: #202c33;
+    --wa-out: #005c4b;
+    --wa-text: #e9edef;
+    --wa-muted: #8696a0;
+    --wa-divider: #222d34;
+    --wa-author: #53bdeb;
+    --wa-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.35);
+    --wa-pill: #182229;
+  }
+}
+
+:root[data-theme="dark"] {
+  --wa-bg: #0b141a;
+  --wa-panel: #202c33;
+  --wa-in: #202c33;
+  --wa-out: #005c4b;
+  --wa-text: #e9edef;
+  --wa-muted: #8696a0;
+  --wa-divider: #222d34;
+  --wa-author: #53bdeb;
+  --wa-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.35);
+  --wa-pill: #182229;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-background-primary, var(--wa-bg));
+  color: var(--color-text-primary, var(--wa-text));
+  font-family: var(--font-wa);
+  font-size: var(--font-text-md-size, 14.2px);
+  line-height: 19px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The chat wallpaper: WhatsApp ships a doodle PNG; under a sealed CSP this is
+   the closest thing that costs no resource — a faint, irregular tint field. */
+.wallpaper {
+  background-image: radial-gradient(circle at 12% 22%, rgba(127, 127, 127, 0.045) 0 9px, transparent 10px),
+    radial-gradient(circle at 63% 8%, rgba(127, 127, 127, 0.04) 0 6px, transparent 7px),
+    radial-gradient(circle at 84% 46%, rgba(127, 127, 127, 0.05) 0 11px, transparent 12px),
+    radial-gradient(circle at 31% 71%, rgba(127, 127, 127, 0.035) 0 7px, transparent 8px),
+    radial-gradient(circle at 52% 90%, rgba(127, 127, 127, 0.045) 0 8px, transparent 9px);
+  background-size: 240px 240px;
+}
+
+header.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(9px + var(--safe-top)) calc(14px + var(--safe-right)) 9px calc(14px + var(--safe-left));
+  background: var(--color-background-secondary, var(--wa-panel));
+  border-bottom: 1px solid var(--color-border-primary, var(--wa-divider));
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 500;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar .sub {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--color-text-secondary, var(--wa-muted));
+}
+
+.topbar .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The round monogram WhatsApp puts where a photo would be. */
+.avatar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--wa-muted) 34%, transparent);
+  color: var(--wa-panel);
+  font-size: 15px;
+  font-weight: 500;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--wa-accent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--wa-accent) 45%, transparent);
+  border-radius: 16px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wa-accent) 12%, transparent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The centred capsule WhatsApp uses for dates and system notes. */
+.pill {
+  align-self: center;
+  margin: 10px auto;
+  padding: 5px 12px;
+  border-radius: 7.5px;
+  background: var(--wa-pill);
+  box-shadow: var(--wa-shadow);
+  color: var(--color-text-secondary, var(--wa-muted));
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--color-text-secondary, var(--wa-muted));
+  font-size: 13.5px;
+}
+
+.reveal {
+  animation: pop 260ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+  }
+}

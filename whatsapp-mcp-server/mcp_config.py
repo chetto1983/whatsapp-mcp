@@ -1,8 +1,10 @@
 """Side-effect-free helpers for MCP server configuration env vars."""
 
+from typing import Any
+
 from mcp.server.transport_security import TransportSecuritySettings
 
-# Accepted WHATSAPP_MCP_TRANSPORT values mapped to FastMCP transport names.
+# Accepted WHATSAPP_MCP_TRANSPORT values mapped to MCPServer transport names.
 # "http" is a friendly alias for the spec's current "streamable-http" transport.
 TRANSPORT_ALIASES = {
     "stdio": "stdio",
@@ -20,7 +22,7 @@ COMPOSE_ALLOWED_ORIGINS = ("http://whatsapp:*", "http://aura-whatsapp:*")
 
 
 def resolve_transport(value: str | None) -> str:
-    """Map a WHATSAPP_MCP_TRANSPORT value to a FastMCP transport name.
+    """Map a WHATSAPP_MCP_TRANSPORT value to an MCPServer transport name.
 
     Unset or whitespace-only values default to "stdio".
     Raises ValueError for unrecognized values.
@@ -66,16 +68,67 @@ def _split_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def resolve_stateless(value: str | None) -> bool:
+    """Parse WHATSAPP_MCP_STATELESS, defaulting to True.
+
+    The 2026-07-28 revision made the protocol core stateless: no `initialize`
+    handshake to pin a session, no `Mcp-Session-Id` header, so a server can sit
+    behind a plain round-robin load balancer. This server has no per-session
+    state to keep — every tool reads SQLite or calls the bridge — so stateless is
+    the honest default, and the env var exists only to put a pre-2026 host back
+    on the session-bearing path.
+
+    Anything other than a recognised false-ish word is True.
+    """
+    return (value or "").strip().lower() not in ("0", "false", "no", "off")
+
+
+def resolve_run_kwargs(
+    transport: str,
+    *,
+    host: str | None = None,
+    port: str | None = None,
+    allowed_hosts: str | None = None,
+    allowed_origins: str | None = None,
+    stateless: str | None = None,
+) -> dict[str, Any]:
+    """Build the keyword arguments for `MCPServer.run()` on a given transport.
+
+    `run()` is overloaded per transport and rejects arguments the transport does
+    not take: stdio accepts none at all, and `stateless_http` belongs to
+    streamable-http alone. Resolving that here keeps the launch block a single
+    call and makes the mapping testable without starting a server.
+
+    Raises:
+        ValueError: If the host/port/stateless values are unusable.
+    """
+    if transport == "stdio":
+        return {}
+    resolved_host = resolve_host(host)
+    kwargs: dict[str, Any] = {
+        "host": resolved_host,
+        "port": resolve_port(port),
+        "transport_security": resolve_transport_security(
+            resolved_host,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
+        ),
+    }
+    if transport == "streamable-http":
+        kwargs["stateless_http"] = resolve_stateless(stateless)
+    return kwargs
+
+
 def resolve_transport_security(
     host: str,
     allowed_hosts: str | None = None,
     allowed_origins: str | None = None,
 ) -> TransportSecuritySettings:
-    """Build FastMCP transport-security settings for network transports.
+    """Build transport-security settings for the network transports.
 
-    FastMCP enables DNS rebinding protection when constructed with the default
-    localhost host. This app resolves WHATSAPP_MCP_HOST at launch time, so the
-    allow-list must be refreshed after the final bind host is known.
+    The server enables DNS rebinding protection with a localhost allow-list by
+    default. This app resolves WHATSAPP_MCP_HOST at launch time, so the
+    allow-list must be built after the final bind host is known.
     """
     hosts = _split_csv(allowed_hosts)
     if not hosts:
