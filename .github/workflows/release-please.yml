@@ -27,6 +27,28 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  publish-release-image:
+    name: Publish Release Image
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      # release-please creates the tag with GITHUB_TOKEN, and a tag pushed by
+      # that token does not start a workflow run — so publish-image.yml never
+      # saw the release. workflow_dispatch is one of the two events exempt from
+      # that rule, so dispatching it here builds the tag without needing a PAT.
+      - name: Build the image for the release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed as an environment variable rather than interpolated into the
+          # run block: an expression expanded inline is substituted before the
+          # shell parses the line, so any metacharacter in the value would be
+          # executed rather than quoted.
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: gh workflow run publish-image.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+
   publish-release-assets:
     name: Publish Release Artifacts
     needs: release-please
