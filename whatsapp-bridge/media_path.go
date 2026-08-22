@@ -15,6 +15,11 @@ package main
 //
 // Symlinks are resolved before the prefix check, so dropping a symlink
 // inside outbox/ that points at /etc/passwd does not bypass the guard.
+//
+// The read itself goes through an os.Root anchored at the matching root
+// (readMediaFile), so confinement holds at the syscall level: swapping a
+// component for a symlink between the check and the read cannot lead the
+// read out of the root.
 
 import (
 	"errors"
@@ -90,10 +95,9 @@ func canonicalizePath(p string) (string, error) {
 	return resolved, nil
 }
 
-// validateMediaPath checks whether mediaPath points at a regular file
-// inside one of the allowed roots. Returns the canonical path on success
-// so callers read from the resolved file (defends against TOCTOU between
-// validation and ReadFile in degenerate cases).
+// validateMediaPath checks whether mediaPath resolves inside one of the
+// allowed roots and returns the canonical, symlink-free path. It does not
+// open or stat the file: readMediaFile does that through an os.Root.
 func validateMediaPath(mediaPath string, allowedRoots []string) (string, error) {
 	if mediaPath == "" {
 		return "", errors.New("media_path is empty")
@@ -120,15 +124,59 @@ func validateMediaPath(mediaPath string, allowedRoots []string) (string, error) 
 		return "", errOutsideRoots(resolved)
 	}
 
-	info, err := os.Stat(resolved)
+	return resolved, nil
+}
+
+// readMediaFile validates mediaPath and reads it through an os.Root anchored
+// at the media root that contains it, so every syscall is confined to that
+// directory. Returns the bytes and the canonical path, which callers use for
+// the outgoing filename and MIME classification.
+func readMediaFile(mediaPath string, allowedRoots []string) ([]byte, string, error) {
+	canonical, err := validateMediaPath(mediaPath, allowedRoots)
 	if err != nil {
-		return "", fmt.Errorf("stat media_path: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("media_path is not a regular file: %q", resolved)
+		return nil, "", err
 	}
 
-	return resolved, nil
+	root, rel, err := openContainingRoot(canonical, allowedRoots)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = root.Close() }()
+
+	info, err := root.Stat(rel)
+	if err != nil {
+		return nil, "", fmt.Errorf("stat media_path: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("media_path is not a regular file: %q", canonical)
+	}
+
+	data, err := root.ReadFile(rel)
+	if err != nil {
+		return nil, "", fmt.Errorf("read media_path: %w", err)
+	}
+	return data, canonical, nil
+}
+
+// openContainingRoot opens the allowed root that holds canonical and returns
+// it together with canonical expressed relative to that root. Callers must
+// close the returned root.
+func openContainingRoot(canonical string, allowedRoots []string) (*os.Root, string, error) {
+	for _, r := range allowedRoots {
+		if !pathHasPrefix(canonical, r) {
+			continue
+		}
+		rel, err := filepath.Rel(r, canonical)
+		if err != nil {
+			return nil, "", fmt.Errorf("relativize media_path: %w", err)
+		}
+		root, err := os.OpenRoot(r)
+		if err != nil {
+			return nil, "", fmt.Errorf("open media root %q: %w", r, err)
+		}
+		return root, rel, nil
+	}
+	return nil, "", errOutsideRoots(canonical)
 }
 
 // withinRoots reports whether path sits in one of the allowed roots.

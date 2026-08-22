@@ -1162,7 +1162,7 @@ func resolveRecipientJID(client *whatsmeow.Client, recipient string) (types.JID,
 }
 
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string, quotedMsgID string, quotedSenderJID string, quotedContent string) (bool, string) {
+func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string, mediaData []byte, quotedMsgID string, quotedSenderJID string, quotedContent string) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -1195,14 +1195,10 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 
 	msg := &waProto.Message{}
 
-	// Check if we have media to send
+	// Check if we have media to send. The bytes were read by the caller
+	// through readMediaFile, which confines the read to the configured media
+	// roots; mediaPath is kept only for naming and MIME classification.
 	if mediaPath != "" {
-		// Read media file
-		mediaData, err := os.ReadFile(mediaPath)
-		if err != nil {
-			return false, fmt.Sprintf("Error reading media file: %v", err)
-		}
-
 		mediaType, mimeType, _ := classifyMediaPath(mediaPath)
 
 		// Upload media to WhatsApp servers
@@ -2301,12 +2297,13 @@ func newRESTMuxWithClientGetter(getClient func() *whatsmeow.Client, messageStore
 			return
 		}
 
-		// Validate and canonicalize media_path against the configured roots
-		// before reading. This prevents the bridge from being used as a
-		// generic file-read primitive (e.g. media_path=/Users/x/.ssh/id_rsa).
+		// Validate media_path against the configured roots and read it through
+		// an os.Root anchored there. This prevents the bridge from being used
+		// as a generic file-read primitive (e.g. media_path=/Users/x/.ssh/id_rsa).
 		resolvedMediaPath := req.MediaPath
+		var mediaData []byte
 		if req.MediaPath != "" {
-			canonical, mpErr := validateMediaPath(req.MediaPath, allowedMediaRoots)
+			data, canonical, mpErr := readMediaFile(req.MediaPath, allowedMediaRoots)
 			if mpErr != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
@@ -2317,6 +2314,7 @@ func newRESTMuxWithClientGetter(getClient func() *whatsmeow.Client, messageStore
 				return
 			}
 			resolvedMediaPath = canonical
+			mediaData = data
 		}
 
 		// Avoid logging req.Message verbatim — it's user content and may
@@ -2325,7 +2323,7 @@ func newRESTMuxWithClientGetter(getClient func() *whatsmeow.Client, messageStore
 			req.Recipient, len(req.Message), resolvedMediaPath != "")
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, resolvedMediaPath, req.QuotedMessageID, req.QuotedSenderJID, req.QuotedContent)
+		success, message := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, resolvedMediaPath, mediaData, req.QuotedMessageID, req.QuotedSenderJID, req.QuotedContent)
 		fmt.Printf("← /api/send success=%v status=%q\n", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
