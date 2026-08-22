@@ -128,3 +128,51 @@ func TestResolveMediaRootsAcceptsEnvList(t *testing.T) {
 		t.Fatalf("expected 2 roots, got %d", len(roots))
 	}
 }
+
+// The rejection for a path outside the roots must not double as a filesystem
+// probe: an existing file and a missing one have to come back the same way.
+func TestValidateMediaPathDoesNotLeakExistenceOutsideRoots(t *testing.T) {
+	root := t.TempDir()
+	resolvedRoot, _ := filepath.EvalSymlinks(root)
+	outside := t.TempDir()
+	existing := writeFile(t, outside, "secret.txt", "PRETEND-SECRET")
+	missing := filepath.Join(outside, "does-not-exist.txt")
+
+	for _, tc := range []struct{ name, path string }{
+		{"existing", existing},
+		{"missing", missing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validateMediaPath(tc.path, []string{resolvedRoot})
+			if err == nil {
+				t.Fatalf("expected %s path outside the root to be rejected", tc.name)
+			}
+			if !strings.Contains(err.Error(), "outside the configured media roots") {
+				t.Fatalf("expected the confinement error, got: %v", err)
+			}
+			for _, leak := range []string{"no such file", "cannot find", "stat media_path", "not a regular file"} {
+				if strings.Contains(err.Error(), leak) {
+					t.Fatalf("error leaks filesystem state (%q): %v", leak, err)
+				}
+			}
+		})
+	}
+}
+
+// Inside the root the caller owns the directory, so a missing file should
+// still produce a useful error rather than the generic rejection.
+func TestValidateMediaPathReportsMissingFileInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("eval root: %v", err)
+	}
+
+	_, err = validateMediaPath(filepath.Join(resolvedRoot, "gone.txt"), []string{resolvedRoot})
+	if err == nil {
+		t.Fatal("expected an error for a missing file")
+	}
+	if !strings.Contains(err.Error(), "resolve media_path") {
+		t.Fatalf("expected a resolve error inside the root, got: %v", err)
+	}
+}

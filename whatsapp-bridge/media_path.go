@@ -104,7 +104,20 @@ func validateMediaPath(mediaPath string, allowedRoots []string) (string, error) 
 
 	resolved, err := filepath.EvalSymlinks(mediaPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve media_path: %w", err)
+		// Report why resolution failed only for a path that is lexically
+		// inside an allowed root — there the caller owns the directory and
+		// deserves a useful "no such file". For anything else the errno
+		// would answer "does /etc/shadow exist?" for any path on the host.
+		if withinRoots(filepath.Clean(mediaPath), allowedRoots) {
+			return "", fmt.Errorf("resolve media_path: %w", err)
+		}
+		return "", errOutsideRoots(mediaPath)
+	}
+
+	// Confinement is checked before any further filesystem access, so a path
+	// outside the roots is never stat'ed.
+	if !withinRoots(resolved, allowedRoots) {
+		return "", errOutsideRoots(resolved)
 	}
 
 	info, err := os.Stat(resolved)
@@ -115,15 +128,27 @@ func validateMediaPath(mediaPath string, allowedRoots []string) (string, error) 
 		return "", fmt.Errorf("media_path is not a regular file: %q", resolved)
 	}
 
+	return resolved, nil
+}
+
+// withinRoots reports whether path sits in one of the allowed roots.
+func withinRoots(path string, allowedRoots []string) bool {
 	for _, root := range allowedRoots {
-		if pathHasPrefix(resolved, root) {
-			return resolved, nil
+		if pathHasPrefix(path, root) {
+			return true
 		}
 	}
-	return "", fmt.Errorf(
+	return false
+}
+
+// errOutsideRoots is the single rejection returned for every path outside the
+// allowed roots, whether or not it exists, so the error text carries no
+// information about the filesystem the caller cannot already reach.
+func errOutsideRoots(path string) error {
+	return fmt.Errorf(
 		"media_path %q is outside the configured media roots; "+
 			"set WHATSAPP_MEDIA_ROOTS to allow additional directories",
-		resolved,
+		path,
 	)
 }
 
