@@ -1409,6 +1409,33 @@ func TestExtractMediaInfo_NoMediaReturnsEmpty(t *testing.T) {
 	}
 }
 
+// The message ID is chosen by the sender — whatsmeow copies the stanza id
+// attribute verbatim — and downloadMedia rebuilds this same name to decide
+// where to write the file, so it must never grow a path separator.
+func TestExtractMediaInfo_HostileMessageIDStaysOneSegment(t *testing.T) {
+	ts := time.Unix(1710000000, 0).UTC()
+	const msgID = "../../../../home/user/.ssh/authorized_keys"
+
+	// A document with no FileName falls back to the generated name, and
+	// downloadMedia appends no extension for documents — the worst case.
+	msg := &waProto.Message{
+		DocumentMessage: &waProto.DocumentMessage{
+			URL:      proto.String("https://mmg.whatsapp.net/v/t62.7119-24/doc.enc"),
+			MediaKey: []byte{0x01, 0x02},
+		},
+	}
+
+	_, filename, _, _, _, _, _ := extractMediaInfo(msg, ts, msgID)
+
+	if strings.ContainsAny(filename, `/\`) {
+		t.Fatalf("filename %q contains a path separator", filename)
+	}
+	want := "document_" + ts.Format("20060102_150405") + "_" + sanitizeStoreSegment(msgID)
+	if filename != want {
+		t.Fatalf("filename = %q, want %q", filename, want)
+	}
+}
+
 func TestMigrateLegacyLIDChatsToPhoneJIDs_AggregatesByPhoneJIDDeterministically(t *testing.T) {
 	ms := newTestMessageStore(t)
 	logger := testLogger()

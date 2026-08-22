@@ -1426,7 +1426,9 @@ func extractMediaInfo(msg *waProto.Message, msgTimestamp time.Time, msgID string
 	tsStr := ts.Format("20060102_150405")
 	suffix := tsStr
 	if msgID != "" {
-		suffix = tsStr + "_" + msgID
+		// The sender chooses the message ID; keep it to one path segment
+		// so the name stays safe to join under store/ (see store_path.go).
+		suffix = tsStr + "_" + sanitizeStoreSegment(msgID)
 	}
 
 	// Check for image message
@@ -1866,27 +1868,33 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	default:
 		ext = ""
 	}
-	filename := fmt.Sprintf("%s_%s_%s%s", mediaType, timestamp.Format("20060102_150405"), messageID, ext)
+	// Both components are attacker-influenced: chatJID comes off the wire, and
+	// messageID is whatever the sender put in the stanza id attribute. Reduce
+	// each to a single path segment, then do every filesystem operation through
+	// an os.Root so a bad segment still cannot escape store/.
+	filename := fmt.Sprintf("%s_%s_%s%s", mediaType, timestamp.Format("20060102_150405"), sanitizeStoreSegment(messageID), ext)
+	chatDir := sanitizeStoreSegment(chatJID)
+	relPath := filepath.Join(chatDir, filename)
 
-	// First, check if we already have this file
-	chatDir := fmt.Sprintf("store/%s", strings.ReplaceAll(chatJID, ":", "_"))
+	storeRoot, err := openMediaStoreRoot()
+	if err != nil {
+		return false, "", "", "", fmt.Errorf("failed to open media store: %v", err)
+	}
+	defer func() { _ = storeRoot.Close() }()
 
 	// Create directory for the chat if it doesn't exist
-	if err := os.MkdirAll(chatDir, 0755); err != nil {
+	if err := storeRoot.MkdirAll(chatDir, 0755); err != nil {
 		return false, "", "", "", fmt.Errorf("failed to create chat directory: %v", err)
 	}
 
-	// Generate a local path for the file
-	localPath := fmt.Sprintf("%s/%s", chatDir, filename)
-
 	// Get absolute path
-	absPath, err := filepath.Abs(localPath)
+	absPath, err := filepath.Abs(filepath.Join(mediaStoreDir, relPath))
 	if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	// Check if file already exists
-	if _, err := os.Stat(localPath); err == nil {
+	// First, check if we already have this file
+	if _, err := storeRoot.Stat(relPath); err == nil {
 		// File exists, return it
 		fmt.Printf("📁 File already exists: %s\n", absPath)
 		return true, mediaType, filename, absPath, nil
@@ -1938,7 +1946,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Save the downloaded media to file
-	if err := os.WriteFile(localPath, mediaData, 0644); err != nil {
+	if err := storeRoot.WriteFile(relPath, mediaData, 0644); err != nil {
 		return false, "", "", "", fmt.Errorf("failed to save media file: %v", err)
 	}
 
