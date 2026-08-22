@@ -81,6 +81,37 @@ A Model Context Protocol (MCP) server for WhatsApp, enabling Claude to read and 
 
 4. **Restart Claude Desktop**
 
+### Docker image (GHCR)
+
+A prebuilt image with both components (Go bridge + Python MCP server) is published
+to GitHub Container Registry on every push to `main` and on every `v*` release tag:
+
+```bash
+docker run -d --name whatsapp-mcp \
+  -p 8080:8080 -p 8081:8081 \
+  -v whatsapp-mcp-store:/app/whatsapp-bridge/store \
+  ghcr.io/chetto1983/whatsapp-mcp:latest
+
+# Scan the QR code printed in the logs, then point your MCP client at
+# http://localhost:8080/mcp
+docker logs -f whatsapp-mcp
+```
+
+The image serves the MCP server over Streamable HTTP on `:8080` and the bridge
+REST API on `:8081`. Keep `/app/whatsapp-bridge/store` on a volume — it holds the
+WhatsApp session, both SQLite databases, the media files, and `.bridge-token`.
+Losing it means re-pairing.
+
+| Tag | Points at |
+| --- | --- |
+| `latest` | Newest `main` build |
+| `X.Y.Z`, `X.Y` | Released versions (from the `vX.Y.Z` tags) |
+| `main` | Same as `latest` |
+| `sha-<short>` | One specific commit |
+| `sidecar`, `verygoodplugins-fusion` | Legacy aliases for `latest`, kept for existing Aura deployments |
+
+Pin `X.Y.Z` for anything you care about; `latest` moves with `main`.
+
 ### Updating
 
 Pull the latest changes, then refresh whichever components moved:

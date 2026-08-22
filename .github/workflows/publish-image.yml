@@ -1,0 +1,86 @@
+name: Publish Image
+
+# Publishes the all-in-one bridge + MCP server image to GitHub Container Registry.
+#
+# Triggers:
+#   - push to main        -> :latest, :main, :sha-<short> (+ legacy :sidecar, :verygoodplugins-fusion)
+#   - push of a v* tag    -> :X.Y.Z, :X.Y, :sha-<short>
+#   - manual dispatch     -> whatever the selected ref resolves to
+#
+# Note: release-please must run with RELEASE_PLEASE_TOKEN (a PAT) for the tag it
+# pushes to trigger this workflow — tags created with the default GITHUB_TOKEN do
+# not start new workflow runs. Otherwise, run this workflow manually on the tag.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=sidecar,enable={{is_default_branch}}
+            type=raw,value=verygoodplugins-fusion,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+          labels: |
+            org.opencontainers.image.title=whatsapp-mcp
+            org.opencontainers.image.description=WhatsApp bridge (Go) + MCP server (Python) in one image
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
