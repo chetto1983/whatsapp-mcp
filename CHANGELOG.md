@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/chetto1983/whatsapp-mcp/compare/v0.1.0...v0.2.0) (2026-08-22)
+
+
+### Features
+
+* move to MCP 2.0.0, serve stateless, and ship two MCP Apps views ([1a656ee](https://github.com/chetto1983/whatsapp-mcp/commit/1a656ee5c70169ade0c9d8def0cd634cf768cbfa))
+
+
+### Bug Fixes
+
+* advance last_message_time only where a message is stored ([6b56189](https://github.com/chetto1983/whatsapp-mcp/commit/6b56189c1cbc1b15c7f8ff17d6ef766c31656950))
+
 ## [0.1.0](https://github.com/chetto1983/whatsapp-mcp/compare/v0.4.1...v0.1.0) (2026-07-01)
 
 
