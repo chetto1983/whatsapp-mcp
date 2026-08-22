@@ -53,6 +53,11 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_NAME }}
+          # latest=auto (the default) would also move :latest onto every v* tag,
+          # leaving it to whichever of the two builds ran last. :latest tracks
+          # main, the way :sidecar did before this workflow existed; releases are
+          # addressable as :X.Y.Z and :X.Y.
+          flavor: latest=false
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=sidecar,enable={{is_default_branch}}
