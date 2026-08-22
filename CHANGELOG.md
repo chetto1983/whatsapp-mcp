@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.0...v0.2.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **bridge:** confine downloaded media to the store directory ([242a174](https://github.com/chetto1983/whatsapp-mcp/commit/242a174ce28ea035348ddc2af91a43c59b5f9c2f))
+* **bridge:** confine downloaded media to the store directory ([dc224ed](https://github.com/chetto1983/whatsapp-mcp/commit/dc224ed179b5f11f876b5e448ef4c3446afb9af9))
+* **bridge:** read outbound media through an os.Root ([f4f1ab0](https://github.com/chetto1983/whatsapp-mcp/commit/f4f1ab0cecb19ceb7ad1de8c49b703377251ff9b))
+* **bridge:** read outbound media through an os.Root ([2a5118a](https://github.com/chetto1983/whatsapp-mcp/commit/2a5118acbe1840b1624f2ad108502a89509a8e5e))
+
 ## [0.2.0](https://github.com/chetto1983/whatsapp-mcp/compare/v0.1.0...v0.2.0) (2026-08-22)
 
 
