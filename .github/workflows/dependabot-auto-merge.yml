@@ -4,8 +4,13 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
 
+# The called workflow declares contents/issues/pull-requests write. A reusable
+# workflow cannot request more than the caller grants, and GitHub validates that
+# at startup even when the job's `if` is false — so omitting issues: write here
+# failed the run on every pull request, dependabot's or not.
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 jobs:
   auto-merge:
