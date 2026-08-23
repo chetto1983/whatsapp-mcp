@@ -17,10 +17,13 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from apps_ui import CHATS_URI, THREAD_URI, build_apps, openai_alias
+from apps_ui import CLIENT_URI, build_apps, openai_alias
 from mcp_config import resolve_run_kwargs, resolve_transport
 from whatsapp import (
     download_media as whatsapp_download_media,
+)
+from whatsapp import (
+    media_data_url as whatsapp_media_data_url,
 )
 from whatsapp import (
     get_chat as whatsapp_get_chat,
@@ -72,7 +75,7 @@ from whatsapp import (
 apps = build_apps()
 
 
-@apps.tool(resource_uri=THREAD_URI, meta=openai_alias(THREAD_URI))
+@apps.tool(resource_uri=CLIENT_URI, meta=openai_alias(CLIENT_URI))
 def list_messages(
     after: str | None = None,
     before: str | None = None,
@@ -121,7 +124,7 @@ def list_messages(
     return messages
 
 
-@apps.tool(resource_uri=CHATS_URI, meta=openai_alias(CHATS_URI))
+@apps.tool(resource_uri=CLIENT_URI, meta=openai_alias(CLIENT_URI))
 def list_chats(
     query: str | None = None,
     limit: int = 50,
@@ -430,6 +433,30 @@ def download_media(message_id: str, chat_jid: str) -> dict[str, Any]:
         return {"success": True, "message": "Media downloaded successfully", "file_path": file_path}
     else:
         return {"success": False, "message": "Failed to download media"}
+
+
+@mcp.tool()
+def get_media_data(message_id: str, chat_jid: str) -> dict[str, Any]:
+    """Return a message's image as a data: URL, for a rendered view to display.
+
+    `download_media` gives back a path inside this container, which a browser can
+    neither open nor fetch, so a view could only ever show a placeholder where a
+    photo belongs. This carries the bytes in the result instead.
+
+    Read-only, and images only: nothing is sent, nothing is modified, and a file
+    that is not an image a view can paint -- or that is over the inline cap -- is
+    refused with the reason rather than silently returned as a blank.
+
+    Args:
+        message_id: The ID of the message containing the media
+        chat_jid: The JID of the chat containing the message
+
+    Returns:
+        On success the mime type, the byte count and a `data:` URL; otherwise
+        `success: False` and a `reason` of unavailable, not_inlinable, too_large or
+        unreadable.
+    """
+    return whatsapp_media_data_url(message_id, chat_jid)
 
 
 def shutdown_handler(signum, frame):

@@ -1,0 +1,1041 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WhatsApp</title>
+    <style>
+      /*{{THEME}}*/
+
+      /* ---- the two panes ------------------------------------------------
+         WhatsApp is a two-pane client: the chat index stays put on the left
+         while a conversation is read on the right. This view was two separate
+         documents bound to two tools, so whichever one the model called filled
+         the whole frame and the other half of the app was simply absent -- you
+         could see a thread with no way back to the list, or a list that could
+         only reach a thread by asking the model for one. One document with both
+         panes is the shape the product has, and the shape the operator asked
+         for; either tool result now lands in its own pane and the other pane
+         fills itself with a read-only call of its own. */
+      .app {
+        display: grid;
+        grid-template-columns: minmax(280px, 380px) 1fr;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      .pane {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      .pane.index {
+        background: var(--color-background-secondary, var(--wa-panel));
+        border-right: 1px solid var(--color-border-primary, var(--wa-divider));
+      }
+
+      .scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+
+      /* One pane at a time when there is no room for two. The index keeps
+         priority: a conversation pane with nothing chosen is a blank slab. */
+      @media (max-width: 720px) {
+        .app { grid-template-columns: 1fr; }
+        .app[data-reading="1"] .pane.index { display: none; }
+        .app:not([data-reading="1"]) .pane.chat { display: none; }
+      }
+
+      .back {
+        display: none;
+        flex: none;
+        margin-right: 2px;
+        padding: 4px 10px;
+      }
+
+      @media (max-width: 720px) { .back { display: inline-block; } }
+
+      /* ---- index pane --------------------------------------------------- */
+
+      .search {
+        padding: 7px calc(12px + var(--safe-left)) 7px calc(12px + var(--safe-left));
+        background: var(--color-background-secondary, var(--wa-panel));
+        border-bottom: 1px solid var(--color-border-primary, var(--wa-divider));
+      }
+
+      .search input {
+        width: 100%;
+        padding: 8px 14px;
+        font: inherit;
+        font-size: 14px;
+        color: var(--color-text-primary, var(--wa-text));
+        background: color-mix(in srgb, var(--color-text-tertiary, var(--wa-muted)) 12%, transparent);
+        border: 0;
+        border-radius: 8px;
+      }
+
+      .search input:focus {
+        outline: 2px solid color-mix(in srgb, var(--color-ring-primary, var(--wa-accent)) 55%, transparent);
+        outline-offset: -2px;
+      }
+
+      .index-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .entry {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        column-gap: 13px;
+        align-items: center;
+        padding: 0 calc(14px + var(--safe-left)) 0 calc(13px + var(--safe-left));
+        cursor: pointer;
+        border-left: 3px solid transparent;
+        transition: background-color 120ms ease;
+      }
+
+      .entry:hover,
+      .entry:focus-visible {
+        outline: none;
+        background: color-mix(in srgb, var(--color-text-tertiary, var(--wa-muted)) 11%, transparent);
+      }
+
+      .entry[aria-selected="true"] {
+        background: color-mix(in srgb, var(--color-text-tertiary, var(--wa-muted)) 16%, transparent);
+        border-left-color: var(--color-ring-primary, var(--wa-accent));
+      }
+
+      .entry .avatar {
+        grid-row: 1 / 3;
+        width: 49px;
+        height: 49px;
+        font-size: 18px;
+      }
+
+      /* The divider starts after the avatar, as WhatsApp's does. */
+      .entry .line1,
+      .entry .line2 {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .entry .line1 { padding-top: 11px; }
+
+      .entry .line2 {
+        padding-bottom: 11px;
+        border-bottom: 1px solid var(--color-border-primary, var(--wa-divider));
+        padding-right: 0;
+      }
+
+      .entry:last-child .line2 { border-bottom: 0; }
+
+      .name {
+        flex: 1;
+        min-width: 0;
+        font-size: 16px;
+        line-height: 21px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .when {
+        flex: none;
+        font-size: 12px;
+        color: var(--color-text-secondary, var(--wa-muted));
+      }
+
+      .preview {
+        flex: 1;
+        min-width: 0;
+        margin-top: 2px;
+        font-size: 14px;
+        line-height: 20px;
+        color: var(--color-text-secondary, var(--wa-muted));
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .preview .ticks { margin-right: 4px; color: #53bdeb; }
+
+      /*
+       * A chat whose timestamp has no message behind it. This used to be a blank
+       * line, which is how a stale bridge passed for a quiet one; it is named.
+       */
+      .preview.hollow { font-style: italic; opacity: 0.85; }
+
+      .preview.hollow::before {
+        content: "⚠";
+        margin-right: 5px;
+        font-style: normal;
+        color: #e8a33d;
+      }
+
+      .badge {
+        flex: none;
+        font-size: 11px;
+        line-height: 16px;
+        padding: 0 6px;
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--color-ring-primary, var(--wa-accent)) 20%, transparent);
+        color: var(--color-ring-primary, var(--wa-accent));
+      }
+
+      /* ---- conversation pane -------------------------------------------- */
+
+      .thread {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 12px calc(18px + var(--safe-right)) 14px 18px;
+        min-height: 100%;
+      }
+
+      .row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 2px;
+      }
+
+      .row.out { justify-content: flex-end; }
+
+      /* In a group WhatsApp puts the sender's photo beside the first bubble of a
+         run and indents the rest to stay aligned under it. */
+      .avatar.sm {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+        margin-top: 1px;
+      }
+
+      .row.indent { margin-left: 36px; }
+
+      /* WhatsApp only tails the first bubble of a run from the same side. */
+      .row.lead { margin-top: 12px; }
+
+      .bubble {
+        position: relative;
+        max-width: min(58ch, 78%);
+        padding: 6px 7px 8px 9px;
+        border-radius: 7.5px;
+        /* Incoming takes the host's own raised surface so it reads correctly on
+           any host; outgoing keeps WhatsApp's green, which is the one colour in a
+           transcript that carries meaning -- it is how you see at a glance which
+           messages are yours. */
+        background: var(--color-background-tertiary, var(--wa-in));
+        box-shadow: var(--wa-shadow);
+      }
+
+      .row.out .bubble { background: var(--wa-out); }
+
+      .row.lead .bubble { border-top-left-radius: 0; }
+
+      .row.out.lead .bubble {
+        border-top-left-radius: 7.5px;
+        border-top-right-radius: 0;
+      }
+
+      .row.lead .bubble::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: -8px;
+        border: 0 solid transparent;
+        border-top: 8px solid var(--color-background-tertiary, var(--wa-in));
+        border-left-width: 8px;
+      }
+
+      .row.out.lead .bubble::before {
+        left: auto;
+        right: -8px;
+        border-top-color: var(--wa-out);
+        border-left-width: 0;
+        border-right-width: 8px;
+      }
+
+      .author {
+        display: block;
+        margin-bottom: 1px;
+        color: var(--wa-author);
+        font-size: 12.8px;
+        font-weight: 500;
+      }
+
+      .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+      .text a {
+        color: var(--wa-link, #027eb5);
+        text-decoration: underline;
+        cursor: pointer;
+      }
+
+      :root[data-theme="dark"] .text a,
+      :root:not([data-theme="light"]) .text a { --wa-link: #53bdeb; }
+
+      /* Floated ahead of the text so a short last line keeps the stamp beside it,
+         the way WhatsApp tucks the time into the bubble's bottom-right. */
+      .stamp {
+        float: right;
+        margin: 8px -2px -4px 10px;
+        font-size: 11px;
+        line-height: 15px;
+        color: var(--color-text-secondary, var(--wa-muted));
+        user-select: none;
+      }
+
+      .row.out .stamp .ticks { margin-left: 3px; color: #53bdeb; }
+
+      .attachment {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 2px 0 1px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--color-text-tertiary, var(--wa-muted)) 14%, transparent);
+        color: var(--color-text-secondary, var(--wa-muted));
+        font-size: 13px;
+      }
+
+      .attachment::before { content: "◧"; font-size: 14px; }
+
+      /* A photo is the message, not an annotation on it, so it gets the bubble's
+         width and the text sits under it the way WhatsApp lays a caption out. */
+      .media {
+        display: block;
+        margin: 0 0 3px;
+        min-height: 90px;
+        border-radius: 6px;
+        overflow: hidden;
+        background: color-mix(in srgb, var(--color-text-tertiary, var(--wa-muted)) 14%, transparent);
+      }
+
+      .media img {
+        display: block;
+        width: 100%;
+        height: auto;
+        max-height: 420px;
+        object-fit: cover;
+        cursor: zoom-in;
+      }
+
+      .media .placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 90px;
+        padding: 10px;
+        font-size: 12.5px;
+        color: var(--color-text-secondary, var(--wa-muted));
+      }
+
+      /* ---- shared chrome ------------------------------------------------- */
+
+      .toolbar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px calc(14px + var(--safe-right)) calc(10px + var(--safe-bottom)) 14px;
+        background: var(--color-background-secondary, var(--wa-panel));
+        border-top: 1px solid var(--color-border-primary, var(--wa-divider));
+      }
+
+      .toolbar .count {
+        margin-left: auto;
+        font-size: 12.5px;
+        color: var(--color-text-secondary, var(--wa-muted));
+      }
+
+      header.topbar { flex: none; }
+    </style>
+  </head>
+  <body>
+    <div class="app" id="app" data-reading="0">
+      <section class="pane index" aria-label="Chats">
+        <header class="topbar">
+          <div class="grow">
+            <h1>Chats</h1>
+            <span class="sub" id="indexSub">loading…</span>
+          </div>
+        </header>
+
+        <div class="search">
+          <input id="filter" type="search" placeholder="Search or start a new chat" autocomplete="off" />
+        </div>
+
+        <div class="scroll">
+          <ul class="index-list" id="index">
+            <li class="empty" id="indexEmpty">Waiting for the chat list…</li>
+          </ul>
+        </div>
+
+        <footer class="toolbar">
+          <button id="refresh" disabled>Refresh</button>
+          <span class="count" id="indexCount"></span>
+        </footer>
+      </section>
+
+      <section class="pane chat" aria-label="Conversation">
+        <header class="topbar">
+          <button class="back" id="back">‹ Chats</button>
+          <div class="avatar" id="monogram">?</div>
+          <div class="grow">
+            <h1 id="title">WhatsApp</h1>
+            <span class="sub" id="subtitle">loading…</span>
+          </div>
+        </header>
+
+        <div class="scroll wallpaper" id="threadScroll">
+          <main class="thread" id="thread">
+            <p class="empty" id="empty">Pick a chat to read it.</p>
+          </main>
+        </div>
+
+        <footer class="toolbar">
+          <button id="older" disabled>Load older</button>
+          <button id="discuss" disabled>Ask about this chat</button>
+          <span class="count" id="count"></span>
+        </footer>
+      </section>
+    </div>
+
+    <script>
+      /*{{BRIDGE}}*/
+    </script>
+    <script>
+      (function () {
+        "use strict";
+
+        const appEl = document.getElementById("app");
+        const indexEl = document.getElementById("index");
+        const indexEmptyEl = document.getElementById("indexEmpty");
+        const indexSubEl = document.getElementById("indexSub");
+        const indexCountEl = document.getElementById("indexCount");
+        const filterEl = document.getElementById("filter");
+        const refreshBtn = document.getElementById("refresh");
+
+        const threadEl = document.getElementById("thread");
+        const threadScrollEl = document.getElementById("threadScroll");
+        const emptyEl = document.getElementById("empty");
+        const titleEl = document.getElementById("title");
+        const subtitleEl = document.getElementById("subtitle");
+        const monogramEl = document.getElementById("monogram");
+        const countEl = document.getElementById("count");
+        const olderBtn = document.getElementById("older");
+        const discussBtn = document.getElementById("discuss");
+        const backBtn = document.getElementById("back");
+
+        const LINK = /https?:\/\/[^\s<>"']+/g;
+
+        // WhatsApp gives every participant a stable colour. Hashing the sender id
+        // reproduces that: the same person keeps the same colour across renders
+        // without the server having to say anything about them.
+        const AVATAR_COLOURS = [
+          "#e542a3", "#1f9bcf", "#c4990c", "#e8663d", "#9b6c4a",
+          "#6a9c00", "#0aa87f", "#8a6fd0", "#d4483b", "#3f9142",
+          "#d1418a", "#2273b8",
+        ];
+
+        let toolArgs = {};
+        let chats = [];
+        let messages = [];
+        let openJid = null;
+        let page = 0;
+        let loading = false;
+
+        function colourFor(key) {
+          let hash = 0;
+          const text = String(key || "");
+          for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+          return AVATAR_COLOURS[hash % AVATAR_COLOURS.length];
+        }
+
+        function timeOf(value) {
+          const at = new Date(value);
+          return isNaN(at) ? "" : at.toTimeString().slice(0, 5);
+        }
+
+        function dayOf(value) {
+          const at = new Date(value);
+          if (isNaN(at)) return "";
+          const midnight = new Date();
+          midnight.setHours(0, 0, 0, 0);
+          const days = Math.round((midnight - new Date(at).setHours(0, 0, 0, 0)) / 86400000);
+          if (days === 0) return "TODAY";
+          if (days === 1) return "YESTERDAY";
+          return at.toLocaleDateString();
+        }
+
+        function whenOf(value) {
+          const at = new Date(value);
+          if (isNaN(at)) return "";
+          const midnight = new Date();
+          midnight.setHours(0, 0, 0, 0);
+          const days = Math.round((midnight - new Date(at).setHours(0, 0, 0, 0)) / 86400000);
+          if (days <= 0) return at.toTimeString().slice(0, 5);
+          if (days === 1) return "yesterday";
+          if (days < 7) return at.toLocaleDateString(undefined, { weekday: "long" });
+          return at.toLocaleDateString();
+        }
+
+        /**
+         * Most of this address book is bare phone numbers, and a monogram of "3"
+         * for every one of them identifies nobody. A numeric name gets its last two
+         * digits instead, which at least differ between chats.
+         */
+        function monogram(name) {
+          const word = String(name || "").trim();
+          if (!word) return "?";
+          const digits = word.replace(/\D/g, "");
+          if (digits && !/[A-Za-z]/.test(word)) return digits.slice(-2);
+          return word[0].toUpperCase();
+        }
+
+        function jidOf(value) {
+          return String(value || "").split("@")[0];
+        }
+
+        // ---- conversation ---------------------------------------------------
+
+        /**
+         * Message text is whatever a third party typed into WhatsApp. It reaches the
+         * DOM as text nodes; the only element built from it is an anchor, and only
+         * after `new URL()` confirms an http(s) scheme — so a `javascript:` payload
+         * has nowhere to land. The anchor never navigates either: the click asks the
+         * host to open it (`ui/open-link`), which is the host's decision to make.
+         */
+        function writeText(target, raw) {
+          let index = 0;
+          LINK.lastIndex = 0;
+          let match;
+          while ((match = LINK.exec(raw)) !== null) {
+            if (match.index > index) {
+              target.appendChild(document.createTextNode(raw.slice(index, match.index)));
+            }
+            const href = match[0];
+            let safe = null;
+            try {
+              const parsed = new URL(href);
+              if (parsed.protocol === "http:" || parsed.protocol === "https:") safe = parsed.href;
+            } catch (_) {
+              safe = null;
+            }
+            if (safe) {
+              const anchor = document.createElement("a");
+              anchor.textContent = href;
+              anchor.setAttribute("role", "link");
+              anchor.addEventListener("click", function (event) {
+                event.preventDefault();
+                window.McpApp.openLink(safe).catch(function (err) {
+                  window.McpApp.log("error", String((err && err.message) || err));
+                });
+              });
+              target.appendChild(anchor);
+            } else {
+              target.appendChild(document.createTextNode(href));
+            }
+            index = match.index + href.length;
+          }
+          if (index < raw.length) target.appendChild(document.createTextNode(raw.slice(index)));
+        }
+
+        function senderOf(msg) {
+          return msg.sender_display || msg.sender_name || msg.sender_phone || msg.sender_jid || "unknown";
+        }
+
+        // ---- media ------------------------------------------------------------
+
+        // What an <img> can actually show. Audio, video and documents keep a chip:
+        // there is nothing to paint, and the bytes would be spent for nothing.
+        const PAINTABLE_MEDIA = { image: true, sticker: true };
+
+        /**
+         * Load one image on demand. The bytes arrive as a `data:` URL in the tool
+         * result -- the frame may not fetch anything, so a src pointing anywhere is
+         * a src that will not load -- and the prefix is checked before it is used
+         * rather than trusted: an <img> src is the one place a scheme from a server
+         * reaches the browser directly, and the check costs one comparison.
+         */
+        function loadMedia(box) {
+          const messageId = box.getAttribute("data-message-id");
+          const chatJid = box.getAttribute("data-chat-jid");
+          if (!messageId || !chatJid) return;
+
+          window.McpApp.callTool("get_media_data", { message_id: messageId, chat_jid: chatJid })
+            .then(function (result) {
+              const payload = window.McpApp.payloadOf(result) || {};
+              const url = payload.data_url;
+              if (!payload.success || typeof url !== "string" || url.slice(0, 11) !== "data:image/") {
+                box.textContent = "";
+                const note = document.createElement("span");
+                note.className = "placeholder";
+                note.textContent = payload.reason === "too_large"
+                  ? "image too large to show (" + Math.round((payload.bytes || 0) / 1024) + " KB)"
+                  : "image unavailable";
+                box.appendChild(note);
+                return;
+              }
+              const img = document.createElement("img");
+              img.alt = "";
+              img.loading = "lazy";
+              img.src = url;
+              img.addEventListener("click", function () {
+                window.McpApp.requestDisplayMode("fullscreen").catch(function () {});
+              });
+              box.textContent = "";
+              box.appendChild(img);
+            })
+            .catch(function (err) {
+              box.textContent = "";
+              const note = document.createElement("span");
+              note.className = "placeholder";
+              note.textContent = "image unavailable";
+              box.appendChild(note);
+              window.McpApp.log("error", String((err && err.message) || err));
+            });
+        }
+
+        // A chat can hold dozens of photos and fetching them all on render would
+        // move megabytes to show a screenful, so each waits until it is nearly in
+        // view. Where the browser has no observer they simply all load.
+        const mediaObserver =
+          typeof IntersectionObserver === "function"
+            ? new IntersectionObserver(
+                function (entries) {
+                  entries.forEach(function (entry) {
+                    if (!entry.isIntersecting) return;
+                    mediaObserver.unobserve(entry.target);
+                    loadMedia(entry.target);
+                  });
+                },
+                { root: threadScrollEl, rootMargin: "300px" }
+              )
+            : null;
+
+        function mediaBox(msg) {
+          const box = document.createElement("div");
+          box.className = "media";
+          box.setAttribute("data-message-id", msg.id || "");
+          box.setAttribute("data-chat-jid", msg.chat_jid || openJid || "");
+          const note = document.createElement("span");
+          note.className = "placeholder";
+          note.textContent = "loading image…";
+          box.appendChild(note);
+          if (mediaObserver) mediaObserver.observe(box);
+          else loadMedia(box);
+          return box;
+        }
+
+        function renderRow(msg, index, lead, group) {
+          const incoming = !msg.is_from_me;
+          const showAuthor = group && incoming;
+          const row = document.createElement("div");
+          row.className =
+            "row reveal " + (incoming ? "in" : "out") + (lead ? " lead" : "") + (showAuthor && !lead ? " indent" : "");
+          row.style.animationDelay = Math.min(index, 20) * 14 + "ms";
+
+          if (showAuthor && lead) {
+            const face = document.createElement("div");
+            face.className = "avatar sm";
+            face.style.backgroundColor = colourFor(msg.sender_phone || msg.sender_jid || senderOf(msg));
+            face.textContent = monogram(senderOf(msg));
+            row.appendChild(face);
+          }
+
+          const bubble = document.createElement("div");
+          bubble.className = "bubble";
+
+          if (showAuthor && lead) {
+            const author = document.createElement("span");
+            author.className = "author";
+            author.style.color = colourFor(msg.sender_phone || msg.sender_jid || senderOf(msg));
+            author.textContent = senderOf(msg);
+            bubble.appendChild(author);
+          }
+
+          const stamp = document.createElement("span");
+          stamp.className = "stamp";
+          stamp.appendChild(document.createTextNode(timeOf(msg.timestamp)));
+          if (msg.is_from_me) {
+            const ticks = document.createElement("span");
+            ticks.className = "ticks";
+            ticks.textContent = "✓✓";
+            stamp.appendChild(ticks);
+          }
+          bubble.appendChild(stamp);
+
+          if (PAINTABLE_MEDIA[msg.media_type]) {
+            bubble.appendChild(mediaBox(msg));
+          } else if (msg.media_type) {
+            const tag = document.createElement("span");
+            tag.className = "attachment";
+            tag.textContent = msg.media_type;
+            bubble.appendChild(tag);
+          }
+
+          const text = (msg.content || "").trim();
+          if (text) {
+            const body = document.createElement("span");
+            body.className = "text";
+            writeText(body, text);
+            bubble.appendChild(body);
+          } else if (!msg.media_type) {
+            const body = document.createElement("span");
+            body.className = "text";
+            body.textContent = " ";
+            bubble.appendChild(body);
+          }
+
+          row.appendChild(bubble);
+          return row;
+        }
+
+        function renderThread() {
+          threadEl.textContent = "";
+          if (!messages.length) {
+            emptyEl.textContent = openJid ? "No messages here." : "Pick a chat to read it.";
+            threadEl.appendChild(emptyEl);
+            countEl.textContent = "";
+            return;
+          }
+          // A conversation reads downward, whatever order the tool returned.
+          const ordered = messages.slice().sort(function (a, b) {
+            return new Date(a.timestamp) - new Date(b.timestamp);
+          });
+          const group = ordered.some(function (m) {
+            return String(m.chat_jid || "").endsWith("@g.us");
+          });
+
+          let day = "";
+          let side = null;
+          ordered.forEach(function (msg, index) {
+            const today = dayOf(msg.timestamp);
+            let lead = false;
+            if (today && today !== day) {
+              const pill = document.createElement("div");
+              pill.className = "pill";
+              pill.textContent = today;
+              threadEl.appendChild(pill);
+              day = today;
+              side = null;
+            }
+            const mine = !!msg.is_from_me;
+            if (side !== mine) {
+              lead = true;
+              side = mine;
+            }
+            threadEl.appendChild(renderRow(msg, index, lead, group));
+          });
+          countEl.textContent = ordered.length + " message" + (ordered.length === 1 ? "" : "s");
+          discussBtn.disabled = false;
+          // A transcript opens at its newest message, the way the app does. After the
+          // next frame, not now: scrollHeight read in the same tick as the appends is
+          // the height before layout, and the pane stayed pinned to the oldest message.
+          requestAnimationFrame(function () {
+            threadScrollEl.scrollTop = threadScrollEl.scrollHeight;
+          });
+        }
+
+        function adoptMessages(list, replace) {
+          if (!Array.isArray(list)) return false;
+          if (replace) messages = [];
+          const seen = new Set(messages.map(function (m) { return m.id; }));
+          list.forEach(function (msg) {
+            if (msg && !seen.has(msg.id)) {
+              seen.add(msg.id);
+              messages.push(msg);
+            }
+          });
+          const named = messages.find(function (m) { return m.chat_name || m.chat_jid; });
+          if (named) {
+            openJid = named.chat_jid || openJid;
+            const label = named.chat_name || jidOf(named.chat_jid);
+            titleEl.textContent = label;
+            monogramEl.textContent = monogram(label);
+            monogramEl.style.backgroundColor = colourFor(named.chat_jid || label);
+          }
+          subtitleEl.textContent = messages.length + " messages loaded";
+          olderBtn.disabled = false;
+          olderBtn.textContent = "Load older";
+          renderThread();
+          renderIndex();
+          return true;
+        }
+
+        function openChat(chat) {
+          openJid = chat.jid;
+          messages = [];
+          page = 0;
+          toolArgs = Object.assign({}, toolArgs, { chat_jid: chat.jid, page: 0 });
+          const label = chat.name || jidOf(chat.jid);
+          titleEl.textContent = label;
+          monogramEl.textContent = monogram(label);
+          monogramEl.style.backgroundColor = colourFor(chat.jid || label);
+          subtitleEl.textContent = "loading…";
+          appEl.setAttribute("data-reading", "1");
+          renderIndex();
+          threadEl.textContent = "";
+          emptyEl.textContent = "Loading…";
+          threadEl.appendChild(emptyEl);
+
+          window.McpApp.callTool("list_messages", { chat_jid: chat.jid })
+            .then(function (result) {
+              if (!adoptMessages(window.McpApp.payloadOf(result), true)) {
+                subtitleEl.textContent = "empty";
+                emptyEl.textContent = "The tool returned nothing this view can show.";
+              }
+            })
+            .catch(function (err) {
+              subtitleEl.textContent = "could not load";
+              emptyEl.textContent = String((err && err.message) || err);
+              window.McpApp.log("error", String((err && err.message) || err));
+            });
+        }
+
+        // ---- index ----------------------------------------------------------
+
+        /**
+         * Names, previews and JIDs are third-party text; every one reaches the DOM as
+         * a text node. The JID is never turned into a link this view resolves either.
+         */
+        function renderEntry(chat, index) {
+          const label = chat.name || jidOf(chat.jid) || "unknown";
+          const entry = document.createElement("li");
+          entry.className = "entry reveal";
+          entry.tabIndex = 0;
+          entry.setAttribute("aria-selected", chat.jid === openJid ? "true" : "false");
+          entry.style.animationDelay = Math.min(index, 20) * 12 + "ms";
+
+          const face = document.createElement("div");
+          face.className = "avatar";
+          face.style.backgroundColor = colourFor(chat.jid || label);
+          face.textContent = monogram(label);
+          entry.appendChild(face);
+
+          const line1 = document.createElement("div");
+          line1.className = "line1";
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = label;
+          line1.appendChild(name);
+          const when = document.createElement("div");
+          when.className = "when";
+          when.textContent = whenOf(chat.last_message_time);
+          line1.appendChild(when);
+          entry.appendChild(line1);
+
+          const line2 = document.createElement("div");
+          line2.className = "line2";
+          const preview = document.createElement("div");
+          const text = (chat.last_message || "").trim();
+          if (text) {
+            preview.className = "preview";
+            if (chat.last_is_from_me) {
+              const ticks = document.createElement("span");
+              ticks.className = "ticks";
+              ticks.textContent = "✓✓";
+              preview.appendChild(ticks);
+            }
+            preview.appendChild(document.createTextNode(text));
+          } else if (chat.last_message_time) {
+            preview.className = "preview hollow";
+            preview.textContent = "active, but no message stored";
+          } else {
+            preview.className = "preview hollow";
+            preview.textContent = "no activity recorded";
+          }
+          line2.appendChild(preview);
+          if (chat.is_group) {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = "group";
+            line2.appendChild(badge);
+          }
+          entry.appendChild(line2);
+
+          entry.addEventListener("click", function () { openChat(chat); });
+          entry.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              openChat(chat);
+            }
+          });
+          return entry;
+        }
+
+        function renderIndex() {
+          const needle = filterEl.value.trim().toLowerCase();
+          const shown = needle
+            ? chats.filter(function (chat) {
+                return ((chat.name || "") + " " + (chat.jid || "")).toLowerCase().indexOf(needle) !== -1;
+              })
+            : chats;
+
+          indexEl.textContent = "";
+          if (!shown.length) {
+            indexEmptyEl.textContent = chats.length ? "No chats match that search." : "No chats here.";
+            indexEl.appendChild(indexEmptyEl);
+          } else {
+            shown.forEach(function (chat, index) {
+              indexEl.appendChild(renderEntry(chat, index));
+            });
+          }
+          const hollow = chats.filter(function (chat) {
+            return chat.last_message_time && !(chat.last_message || "").trim();
+          }).length;
+          indexCountEl.textContent =
+            shown.length + " of " + chats.length + (hollow ? " · " + hollow + " with no stored message" : "");
+        }
+
+        function adoptChats(list) {
+          if (!Array.isArray(list)) return false;
+          chats = list;
+          indexSubEl.textContent = chats.length + " chats";
+          refreshBtn.disabled = false;
+          renderIndex();
+          return true;
+        }
+
+        /** Fill the pane the tool result did not, so both halves are always there. */
+        function fillIndex() {
+          if (chats.length) return;
+          window.McpApp.callTool("list_chats", { limit: 40 })
+            .then(function (result) {
+              if (!adoptChats(window.McpApp.payloadOf(result))) indexSubEl.textContent = "unavailable";
+            })
+            .catch(function (err) {
+              indexSubEl.textContent = "unavailable";
+              indexEmptyEl.textContent = "Could not load the chat list.";
+              window.McpApp.log("error", String((err && err.message) || err));
+            });
+        }
+
+        // ---- wiring ----------------------------------------------------------
+
+        filterEl.addEventListener("input", renderIndex);
+
+        backBtn.addEventListener("click", function () {
+          appEl.setAttribute("data-reading", "0");
+        });
+
+        refreshBtn.addEventListener("click", async function () {
+          refreshBtn.disabled = true;
+          indexSubEl.textContent = "loading…";
+          try {
+            adoptChats(window.McpApp.payloadOf(await window.McpApp.callTool("list_chats", { limit: 40 })));
+          } catch (err) {
+            indexSubEl.textContent = "could not refresh";
+            window.McpApp.log("error", String((err && err.message) || err));
+          } finally {
+            refreshBtn.disabled = false;
+          }
+        });
+
+        olderBtn.addEventListener("click", async function () {
+          if (loading) return;
+          loading = true;
+          olderBtn.disabled = true;
+          subtitleEl.textContent = "loading…";
+          try {
+            page += 1;
+            const args = Object.assign({}, toolArgs, { page: page });
+            if (openJid) args.chat_jid = openJid;
+            const older = window.McpApp.payloadOf(await window.McpApp.callTool("list_messages", args));
+            if (!Array.isArray(older) || !older.length) {
+              olderBtn.textContent = "Nothing older";
+              subtitleEl.textContent = messages.length + " messages loaded";
+              return;
+            }
+            adoptMessages(older, false);
+          } catch (err) {
+            subtitleEl.textContent = "could not load more";
+            window.McpApp.log("error", String((err && err.message) || err));
+          } finally {
+            loading = false;
+            olderBtn.disabled = olderBtn.textContent === "Nothing older";
+          }
+        });
+
+        discussBtn.addEventListener("click", function () {
+          window.McpApp.sendToChat(
+            "Look at the conversation with " + titleEl.textContent + " above (" + messages.length +
+              " messages) and tell me what matters in it."
+          ).catch(function (err) {
+            window.McpApp.log("error", String((err && err.message) || err));
+          });
+        });
+
+        /**
+         * One document serves both tools, so the payload says which pane it belongs
+         * in. Chats and messages are told apart by their own marker fields rather
+         * than by which tool was called: the view is also reached by its own
+         * callTool, where no tool-input notification arrives at all.
+         */
+        function route(payload) {
+          if (!Array.isArray(payload) || !payload.length) return false;
+          const first = payload[0] || {};
+          if (first.last_message_time !== undefined || (first.jid !== undefined && first.id === undefined)) {
+            const ok = adoptChats(payload);
+            if (ok && !messages.length) appEl.setAttribute("data-reading", "0");
+            return ok;
+          }
+          if (first.timestamp !== undefined || first.content !== undefined) {
+            const ok = adoptMessages(payload, true);
+            if (ok) {
+              appEl.setAttribute("data-reading", "1");
+              fillIndex();
+            }
+            return ok;
+          }
+          return false;
+        }
+
+        window.McpApp.start({
+          name: "WhatsApp",
+          version: "2.0.0",
+          onToolInput: function (params) {
+            toolArgs = (params && params.arguments) || {};
+            page = Number(toolArgs.page) || 0;
+            if (toolArgs.chat_jid) {
+              openJid = toolArgs.chat_jid;
+              titleEl.textContent = jidOf(toolArgs.chat_jid);
+              monogramEl.textContent = monogram(jidOf(toolArgs.chat_jid));
+              monogramEl.style.backgroundColor = colourFor(toolArgs.chat_jid);
+            }
+          },
+          onToolResult: function (result) {
+            if (!route(window.McpApp.payloadOf(result))) {
+              subtitleEl.textContent = "empty";
+              emptyEl.textContent = "The tool returned nothing this view can show.";
+              indexSubEl.textContent = "empty";
+            }
+          },
+          onToolCancelled: function (params) {
+            subtitleEl.textContent = "cancelled";
+            emptyEl.textContent = (params && params.reason) || "The tool call was cancelled.";
+          },
+        })
+          .then(fillIndex)
+          .catch(function (err) {
+            subtitleEl.textContent = "no host";
+            emptyEl.textContent = "This view could not reach its host: " + String((err && err.message) || err);
+          });
+      })();
+    </script>
+  </body>
+</html>

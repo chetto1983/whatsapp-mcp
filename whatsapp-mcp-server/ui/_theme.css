@@ -1,10 +1,16 @@
 /*
- * The shared look for this server's Views: WhatsApp's own.
+ * The shared look for this server's Views.
  *
- * A view of a WhatsApp conversation should look like the thing it shows, so the
- * palette, the bubble geometry and the type are WhatsApp Web's. Every colour is
- * a variable the host may override (ext-apps §Theming) — what follows is the
- * fallback for a host that offers nothing.
+ * The CHROME follows the host: every surface, rule, text tone, control colour and
+ * font reads a standard MCP Apps host variable (hostContext.styles.variables, which
+ * _bridge.js applies to the root element) with WhatsApp Web's own value behind it as
+ * the fallback. So the view sits inside its host rather than beside it, and a host
+ * that sends nothing still gets a coherent WhatsApp surface instead of nothing.
+ *
+ * The BUBBLES do not, and that is deliberate. Incoming-vs-outgoing is the one colour
+ * in a transcript that carries meaning rather than style -- it is how you read who
+ * said what at a glance -- and no host variable means "my own message", so --wa-in,
+ * --wa-out and --wa-author stay WhatsApp's however the surrounding chrome is themed.
  *
  * No images and no @font-face: a ui:// resource loads under a restrictive CSP
  * (this server declares every domain list empty), so the wallpaper texture is
@@ -24,11 +30,11 @@
   --wa-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
   --wa-pill: #ffffff;
 
-  --color-background-primary: var(--wa-bg);
-  --color-background-secondary: var(--wa-panel);
-  --color-text-primary: var(--wa-text);
-  --color-text-secondary: var(--wa-muted);
-  --color-border-primary: var(--wa-divider);
+  /* The standard MCP Apps names are NOT defined here. They are read at each use with
+     a --wa-* fallback -- `var(--color-text-primary, var(--wa-text))` -- so a host that
+     sends a token wins and a host that sends nothing still gets WhatsApp's colour.
+     Defining them here as well put the fallback in two places and made it look as
+     though this server were the one supplying them. */
 
   --font-wa: "Segoe UI", "Helvetica Neue", Helvetica, "Lucida Grande", system-ui, sans-serif;
 
@@ -75,21 +81,27 @@ body {
   padding: 0;
   background-color: var(--color-background-primary, var(--wa-bg));
   color: var(--color-text-primary, var(--wa-text));
-  font-family: var(--font-wa);
-  font-size: var(--font-text-md-size, 14.2px);
+  font-family: var(--font-sans, var(--font-wa));
+  /* --text-md is the name MCP Apps defines; --font-text-md-size, used here before,
+     is not one any host sends, so the fallback was the only value this ever had. */
+  font-size: var(--text-md, 14.2px);
   line-height: 19px;
   -webkit-font-smoothing: antialiased;
 }
 
-/* The chat wallpaper: WhatsApp ships a doodle PNG; under a sealed CSP this is
-   the closest thing that costs no resource — a faint, irregular tint field. */
+/* The chat wallpaper: WhatsApp ships a doodle PNG; under a sealed CSP this is the
+   closest thing that costs no resource. The first version used blobs at 4-5% and
+   240px, which on a dark host surface read as smudges rather than as texture --
+   the operator's word for it was blunter. A finer, fainter weave gives the pane a
+   surface without ever competing with a bubble for attention. */
 .wallpaper {
-  background-image: radial-gradient(circle at 12% 22%, rgba(127, 127, 127, 0.045) 0 9px, transparent 10px),
-    radial-gradient(circle at 63% 8%, rgba(127, 127, 127, 0.04) 0 6px, transparent 7px),
-    radial-gradient(circle at 84% 46%, rgba(127, 127, 127, 0.05) 0 11px, transparent 12px),
-    radial-gradient(circle at 31% 71%, rgba(127, 127, 127, 0.035) 0 7px, transparent 8px),
-    radial-gradient(circle at 52% 90%, rgba(127, 127, 127, 0.045) 0 8px, transparent 9px);
-  background-size: 240px 240px;
+  background-image: repeating-linear-gradient(
+      45deg,
+      rgba(127, 127, 127, 0.028) 0 1px,
+      transparent 1px 11px
+    ),
+    repeating-linear-gradient(-45deg, rgba(127, 127, 127, 0.028) 0 1px, transparent 1px 11px);
+  background-size: 44px 44px;
 }
 
 header.topbar {
@@ -134,8 +146,8 @@ header.topbar {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: color-mix(in srgb, var(--wa-muted) 34%, transparent);
-  color: var(--wa-panel);
+  background: color-mix(in srgb, var(--color-text-tertiary, var(--wa-muted)) 34%, transparent);
+  color: var(--color-background-secondary, var(--wa-panel));
   font-size: 15px;
   font-weight: 500;
   text-transform: uppercase;
@@ -145,9 +157,9 @@ header.topbar {
 button {
   font: inherit;
   font-size: 13px;
-  color: var(--wa-accent);
+  color: var(--color-ring-primary, var(--wa-accent));
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--wa-accent) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-ring-primary, var(--wa-accent)) 45%, transparent);
   border-radius: 16px;
   padding: 5px 14px;
   cursor: pointer;
@@ -155,7 +167,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--wa-accent) 12%, transparent);
+  background: color-mix(in srgb, var(--color-ring-primary, var(--wa-accent)) 12%, transparent);
 }
 
 button:disabled {
@@ -169,7 +181,7 @@ button:disabled {
   margin: 10px auto;
   padding: 5px 12px;
   border-radius: 7.5px;
-  background: var(--wa-pill);
+  background: var(--color-background-tertiary, var(--wa-pill));
   box-shadow: var(--wa-shadow);
   color: var(--color-text-secondary, var(--wa-muted));
   font-size: 12.5px;

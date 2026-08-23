@@ -1,20 +1,28 @@
 """MCP Apps views for the WhatsApp server (`io.modelcontextprotocol/ui`).
 
-Two `ui://` resources — a transcript and a chat index — bound to `list_messages`
-and `list_chats`. A host that negotiated MCP Apps renders them in a sandboxed
-iframe; a host that did not receives exactly the same tool payload as before, so
-the UI is a progressive enhancement and never a requirement (ext-apps
-specification/2026-01-26/apps.mdx §"Progressive Enhancement").
+ONE `ui://` resource -- a two-pane client, the chat index beside the open
+conversation -- bound to both `list_messages` and `list_chats`. A host that
+negotiated MCP Apps renders it in a sandboxed iframe; a host that did not receives
+exactly the same tool payload as before, so the UI is a progressive enhancement
+and never a requirement (ext-apps specification/2026-01-26/apps.mdx
+§"Progressive Enhancement").
+
+It was two resources, one per tool, and that was the wrong seam: whichever tool
+the model happened to call filled the whole frame while the other half of the app
+was simply absent -- a transcript with no way back to the list, or a list that
+could only reach a transcript by asking the model for one. WhatsApp is a two-pane
+client; the view is now one document that puts the incoming payload in its own
+pane and fills the other itself.
 
 The views are plain HTML with the JSON-RPC-over-postMessage bridge inlined: the
 ext-apps SDK is TypeScript and expects a bundler, while a `ui://` resource must
-be one self-contained document. `ui/_bridge.js` and `ui/_theme.css` are shared by
-both views and spliced in here rather than duplicated in each file.
+be one self-contained document. `ui/_bridge.js` and `ui/_theme.css` are kept
+authorable on their own and spliced in here.
 
-The views are read from `ui/` beside this module, which is how the server runs
-(the image copies the source tree and launches `main.py` from it). They are not
-packaged into the wheel: `py-modules` carries modules, not data directories, and
-inventing a package just to hold two HTML files would buy nothing here.
+The view is read from `ui/` beside this module, which is how the server runs (the
+image copies the source tree and launches `main.py` from it). It is not packaged
+into the wheel: `py-modules` carries modules, not data directories, and inventing
+a package just to hold the HTML would buy nothing here.
 """
 
 from __future__ import annotations
@@ -25,15 +33,14 @@ from mcp.server.apps import Apps, ResourceCsp
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 
-THREAD_URI = "ui://whatsapp/thread.html"
-CHATS_URI = "ui://whatsapp/chats.html"
+CLIENT_URI = "ui://whatsapp/client.html"
 
-# Placeholders each view carries, and the shared asset spliced into each.
+# Placeholders the view carries, and the shared asset spliced into each.
 _INCLUDES = (("/*{{THEME}}*/", "_theme.css"), ("/*{{BRIDGE}}*/", "_bridge.js"))
 
-# Neither view fetches anything: they render what the host hands them and call
-# back over postMessage. Declaring every domain list empty says exactly that, so
-# a host's sandbox can seal the iframe rather than guess a default.
+# The view never fetches: it renders what the host hands it and calls back over
+# postMessage. Declaring every domain list empty says exactly that, so a host's
+# sandbox can seal the iframe rather than guess a default.
 SEALED_CSP = ResourceCsp(
     connect_domains=[],
     resource_domains=[],
@@ -68,7 +75,7 @@ def _document(name: str) -> str:
 
 
 def build_apps() -> Apps:
-    """Build the Apps extension with both views registered.
+    """Build the Apps extension with the client view registered.
 
     The returned instance must be decorated with its tools (`@apps.tool(...)`)
     before it is handed to `MCPServer(extensions=[...])`: the server consumes the
@@ -77,20 +84,15 @@ def build_apps() -> Apps:
     """
     apps = Apps()
     apps.add_html_resource(
-        THREAD_URI,
-        _document("thread.html"),
-        name="whatsapp-transcript",
-        title="WhatsApp transcript",
-        description="A conversation typeset as a transcript, with paging back through older messages.",
-        csp=SEALED_CSP,
-        prefers_border=True,
-    )
-    apps.add_html_resource(
-        CHATS_URI,
-        _document("chats.html"),
-        name="whatsapp-index",
-        title="WhatsApp chats",
-        description="The chat index, marking any chat whose activity has no stored message behind it.",
+        CLIENT_URI,
+        _document("client.html"),
+        name="whatsapp-client",
+        title="WhatsApp",
+        description=(
+            "The chat index beside the open conversation: pick a chat on the left, read it on the "
+            "right, page back through older messages. Marks any chat whose activity has no stored "
+            "message behind it."
+        ),
         csp=SEALED_CSP,
         prefers_border=True,
     )

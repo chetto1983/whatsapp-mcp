@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import os.path
@@ -1190,3 +1191,70 @@ def download_media(message_id: str, chat_jid: str) -> str | None:
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return None
+
+
+# The media a browser can actually paint. Everything else stays a chip in the view:
+# a rendered panel has nothing to do with an opus blob, and inlining one would only
+# spend bytes on something no <img> will ever show.
+INLINE_MEDIA_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+# WhatsApp compresses what it sends before it ever reaches the store: measured
+# 2026-08-23 over a real store, 28 files, median 200 KB and the largest 568 KB. So
+# 800 KB admits every ordinary photo while still refusing to hand a browser
+# something unbounded -- base64 inflates by a third, and a view is a panel, not a
+# file viewer. A file over the cap keeps its chip and reports its size.
+MAX_INLINE_MEDIA_BYTES = 800_000
+
+
+def media_data_url(message_id: str, chat_jid: str) -> dict[str, Any]:
+    """Download a message's media and return it as a `data:` URL.
+
+    `download_media` returns a path inside the container, which is exactly no use
+    to a rendered view: the browser cannot open it and the sandboxed frame may not
+    fetch anything. The bytes have to travel in the tool result, so this is the
+    same download followed by a read.
+
+    Returns:
+        On success `{"success": True, "mime": ..., "bytes": ..., "data_url": ...}`.
+        On refusal `success` is False and `reason` names which of the three ways it
+        failed -- the download, the type, or the cap -- because "no image" with no
+        reason is the kind of blank a view cannot explain to anyone.
+    """
+    path = download_media(message_id, chat_jid)
+    if not path:
+        return {"success": False, "reason": "unavailable", "message": "The media could not be downloaded."}
+
+    mime = INLINE_MEDIA_MIME.get(os.path.splitext(path)[1].lower())
+    if mime is None:
+        return {
+            "success": False,
+            "reason": "not_inlinable",
+            "message": f"{os.path.splitext(path)[1] or 'this file'} is not an image a view can paint.",
+        }
+
+    try:
+        size = os.path.getsize(path)
+        if size > MAX_INLINE_MEDIA_BYTES:
+            return {
+                "success": False,
+                "reason": "too_large",
+                "bytes": size,
+                "message": f"{size} bytes is over the {MAX_INLINE_MEDIA_BYTES}-byte inline cap.",
+            }
+        with open(path, "rb") as handle:
+            blob = handle.read()
+    except OSError as err:
+        return {"success": False, "reason": "unreadable", "message": str(err)}
+
+    return {
+        "success": True,
+        "mime": mime,
+        "bytes": len(blob),
+        "data_url": "data:" + mime + ";base64," + base64.b64encode(blob).decode("ascii"),
+    }
