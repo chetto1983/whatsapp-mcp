@@ -23,9 +23,6 @@ from whatsapp import (
     download_media as whatsapp_download_media,
 )
 from whatsapp import (
-    media_data_url as whatsapp_media_data_url,
-)
-from whatsapp import (
     get_chat as whatsapp_get_chat,
 )
 from whatsapp import (
@@ -48,6 +45,9 @@ from whatsapp import (
 )
 from whatsapp import (
     list_messages as whatsapp_list_messages,
+)
+from whatsapp import (
+    media_data_url as whatsapp_media_data_url,
 )
 from whatsapp import (
     msg_to_dict,
