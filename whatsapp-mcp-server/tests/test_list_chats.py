@@ -11,6 +11,7 @@ import sqlite3
 import pytest
 
 import whatsapp
+from tenant_context import tenant_store
 
 
 def _make_messages_db(path):
@@ -65,10 +66,10 @@ def _make_messages_db(path):
 
 
 @pytest.fixture
-def messages_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "messages.db"
+def messages_db():
+    db_path = tenant_store() / "messages.db"
+    db_path.parent.mkdir(parents=True)
     _make_messages_db(str(db_path))
-    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(db_path))
     return db_path
 
 

@@ -19,6 +19,8 @@ from mcp.server.mcpserver import MCPServer
 
 from apps_ui import CLIENT_URI, build_apps, openai_alias
 from mcp_config import resolve_run_kwargs, resolve_transport
+from mcp_security import ServiceTokenVerifier, auth_settings, service_token
+from tenant_context import AuraIdentityMiddleware
 from whatsapp import (
     download_media as whatsapp_download_media,
 )
@@ -149,7 +151,13 @@ def list_chats(
     return chats
 
 
-mcp = MCPServer("whatsapp", extensions=[apps])
+mcp = MCPServer(
+    "whatsapp",
+    extensions=[apps],
+    auth=auth_settings(),
+    token_verifier=ServiceTokenVerifier(),
+    middleware=[AuraIdentityMiddleware()],
+)
 
 
 @mcp.tool()
@@ -468,10 +476,12 @@ if __name__ == "__main__":
     # Register signal handlers for clean shutdown
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
+    try:
+        service_token()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
 
-    # Resolve the transport first: host/port are only used (and validated) for the
-    # network transports, so a bad WHATSAPP_MCP_PORT can't break a stdio launch.
-    # The localhost default keeps a remote server unreachable until explicitly opened up.
+    # This Aura fork is a remote MCP and exposes current stateless Streamable HTTP only.
     try:
         transport = resolve_transport(os.getenv("WHATSAPP_MCP_TRANSPORT"))
         run_kwargs = resolve_run_kwargs(
@@ -480,17 +490,13 @@ if __name__ == "__main__":
             port=os.getenv("WHATSAPP_MCP_PORT"),
             allowed_hosts=os.getenv("WHATSAPP_MCP_ALLOWED_HOSTS"),
             allowed_origins=os.getenv("WHATSAPP_MCP_ALLOWED_ORIGINS"),
-            stateless=os.getenv("WHATSAPP_MCP_STATELESS"),
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
 
-    if transport != "stdio":
-        # stdout is reserved for the protocol on stdio; log startup to stderr.
-        mode = "stateless" if run_kwargs.get("stateless_http") else "session-bearing"
-        print(
-            f"WhatsApp MCP server listening on {run_kwargs['host']}:{run_kwargs['port']} via {transport} ({mode})",
-            file=sys.stderr,
-        )
+    print(
+        f"WhatsApp MCP server listening on {run_kwargs['host']}:{run_kwargs['port']} via {transport} (stateless)",
+        file=sys.stderr,
+    )
 
     mcp.run(transport, **run_kwargs)

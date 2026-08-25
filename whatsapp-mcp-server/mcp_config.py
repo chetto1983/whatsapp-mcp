@@ -7,11 +7,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 # Accepted WHATSAPP_MCP_TRANSPORT values mapped to MCPServer transport names.
 # "http" is a friendly alias for the spec's current "streamable-http" transport.
 TRANSPORT_ALIASES = {
-    "stdio": "stdio",
     "http": "streamable-http",
     "streamable-http": "streamable-http",
     "streamable_http": "streamable-http",
-    "sse": "sse",
 }
 DEFAULT_MCP_HOST = "127.0.0.1"
 DEFAULT_MCP_PORT = 8000
@@ -24,17 +22,17 @@ COMPOSE_ALLOWED_ORIGINS = ("http://whatsapp:*", "http://aura-whatsapp:*")
 def resolve_transport(value: str | None) -> str:
     """Map a WHATSAPP_MCP_TRANSPORT value to an MCPServer transport name.
 
-    Unset or whitespace-only values default to "stdio".
+    Unset or whitespace-only values default to Streamable HTTP.
     Raises ValueError for unrecognized values.
     """
-    normalized = (value or "").strip().lower() or "stdio"
+    normalized = (value or "").strip().lower() or "http"
     try:
         return TRANSPORT_ALIASES[normalized]
     except KeyError:
         accepted = ", ".join(sorted(TRANSPORT_ALIASES))
         raise ValueError(
-            f"Invalid WHATSAPP_MCP_TRANSPORT={value!r}; recommended values: stdio, http, sse "
-            f"(http maps to the spec's streamable-http transport; all accepted inputs: {accepted})"
+            f"Invalid WHATSAPP_MCP_TRANSPORT={value!r}; this Aura fork is remote-only "
+            f"(accepted Streamable HTTP inputs: {accepted})"
         ) from None
 
 
@@ -68,21 +66,6 @@ def _split_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def resolve_stateless(value: str | None) -> bool:
-    """Parse WHATSAPP_MCP_STATELESS, defaulting to True.
-
-    The 2026-07-28 revision made the protocol core stateless: no `initialize`
-    handshake to pin a session, no `Mcp-Session-Id` header, so a server can sit
-    behind a plain round-robin load balancer. This server has no per-session
-    state to keep — every tool reads SQLite or calls the bridge — so stateless is
-    the honest default, and the env var exists only to put a pre-2026 host back
-    on the session-bearing path.
-
-    Anything other than a recognised false-ish word is True.
-    """
-    return (value or "").strip().lower() not in ("0", "false", "no", "off")
-
-
 def resolve_run_kwargs(
     transport: str,
     *,
@@ -90,20 +73,16 @@ def resolve_run_kwargs(
     port: str | None = None,
     allowed_hosts: str | None = None,
     allowed_origins: str | None = None,
-    stateless: str | None = None,
 ) -> dict[str, Any]:
     """Build the keyword arguments for `MCPServer.run()` on a given transport.
 
-    `run()` is overloaded per transport and rejects arguments the transport does
-    not take: stdio accepts none at all, and `stateless_http` belongs to
-    streamable-http alone. Resolving that here keeps the launch block a single
-    call and makes the mapping testable without starting a server.
+    This Aura fork exposes the current stateless Streamable HTTP transport only.
 
     Raises:
         ValueError: If the host/port/stateless values are unusable.
     """
-    if transport == "stdio":
-        return {}
+    if transport != "streamable-http":
+        raise ValueError(f"unsupported remote MCP transport: {transport}")
     resolved_host = resolve_host(host)
     kwargs: dict[str, Any] = {
         "host": resolved_host,
@@ -114,8 +93,7 @@ def resolve_run_kwargs(
             allowed_origins=allowed_origins,
         ),
     }
-    if transport == "streamable-http":
-        kwargs["stateless_http"] = resolve_stateless(stateless)
+    kwargs["stateless_http"] = True
     return kwargs
 
 

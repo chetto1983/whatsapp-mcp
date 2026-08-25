@@ -16,12 +16,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "httpx>=0.28.1",
     # mcp 2.0.0 is the SDK for the 2026-07-28 revision: stateless core, the
     # extensions framework, and MCP Apps in `mcp.server.apps`. It removed
     # `mcp.server.fastmcp` outright, so this floor is a requirement, not a
-    # preference. `httpx` is gone from this list because nothing here imports it
-    # — it was the old SDK's transport dependency, and 2.0.0 brings `httpx2`.
+    # preference. The SDK provides its own `httpx2` transport client.
     "mcp>=2.0.0",
     "requests>=2.34.2",
     "anyio<4.14",
@@ -40,7 +38,21 @@ Repository = "https://github.com/verygoodplugins/whatsapp-mcp"
 Issues = "https://github.com/verygoodplugins/whatsapp-mcp/issues"
 
 [tool.setuptools]
-py-modules = ["main", "whatsapp", "audio", "mcp_config", "apps_ui"]
+py-modules = [
+    "apps_ui",
+    "audio",
+    "main",
+    "mcp_config",
+    "mcp_security",
+    "store_migration",
+    "tenant_context",
+    "tenant_gateway",
+    "whatsapp",
+    "whatsapp_actions",
+    "whatsapp_common",
+    "whatsapp_query_contacts",
+    "whatsapp_query_messages",
+]
 
 [tool.mcp]
 name = "io.github.verygoodplugins/whatsapp-mcp"

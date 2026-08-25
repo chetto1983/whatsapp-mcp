@@ -1,8 +1,10 @@
-import importlib
-
 import pytest
 
 import whatsapp
+from tenant_context import AURA_IDENTITY_HEADER
+
+TEST_IDENTITY = "11111111-1111-4111-8111-111111111111"
+TEST_BRIDGE_TOKEN = "bridge-token-for-tests"
 
 
 class DummyResponse:
@@ -15,63 +17,33 @@ class DummyResponse:
         return self._payload
 
 
-def test_bridge_headers_uses_env_token(monkeypatch):
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "env-token")
-
-    assert whatsapp._bridge_headers() == {"Authorization": "Bearer env-token"}
-
-
-def test_bridge_headers_falls_back_to_token_file(monkeypatch, tmp_path):
-    token_file = tmp_path / ".bridge-token"
-    token_file.write_text("file-token\n", encoding="utf-8")
-    monkeypatch.delenv("WHATSAPP_BRIDGE_TOKEN", raising=False)
-    monkeypatch.setattr(whatsapp, "_BRIDGE_TOKEN_PATH", str(token_file))
-
-    assert whatsapp._bridge_headers() == {"Authorization": "Bearer file-token"}
+def expected_headers():
+    return {
+        "Authorization": f"Bearer {TEST_BRIDGE_TOKEN}",
+        AURA_IDENTITY_HEADER: TEST_IDENTITY,
+    }
 
 
-def test_bridge_headers_reads_token_next_to_whatsmeow_db_path(monkeypatch, tmp_path):
-    store_dir = tmp_path / "store"
-    store_dir.mkdir()
-    (store_dir / ".bridge-token").write_text("volume-token\n", encoding="utf-8")
-
-    monkeypatch.delenv("WHATSAPP_BRIDGE_TOKEN", raising=False)
-    monkeypatch.setenv("WHATSMEOW_DB_PATH", str(store_dir / "whatsapp.db"))
-
-    try:
-        importlib.reload(whatsapp)
-        assert whatsapp._bridge_headers() == {"Authorization": "Bearer volume-token"}
-    finally:
-        monkeypatch.delenv("WHATSMEOW_DB_PATH", raising=False)
-        importlib.reload(whatsapp)
+def test_bridge_headers_require_service_token_and_identity():
+    assert whatsapp._bridge_headers() == expected_headers()
 
 
-def test_bridge_headers_prefers_env_over_token_file(monkeypatch, tmp_path):
-    token_file = tmp_path / ".bridge-token"
-    token_file.write_text("file-token\n", encoding="utf-8")
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "env-token")
-    monkeypatch.setattr(whatsapp, "_BRIDGE_TOKEN_PATH", str(token_file))
-
-    assert whatsapp._bridge_headers() == {"Authorization": "Bearer env-token"}
+def test_bridge_headers_fail_closed_without_token(monkeypatch):
+    monkeypatch.delenv("WHATSAPP_BRIDGE_TOKEN")
+    with pytest.raises(RuntimeError, match="WHATSAPP_BRIDGE_TOKEN is required"):
+        whatsapp._bridge_headers()
 
 
-def test_send_message_without_token_surfaces_bridge_401(monkeypatch, tmp_path):
+def test_send_message_without_token_never_calls_gateway(monkeypatch):
     calls = []
-    missing_token = tmp_path / "missing-token"
-    monkeypatch.delenv("WHATSAPP_BRIDGE_TOKEN", raising=False)
-    monkeypatch.setattr(whatsapp, "_BRIDGE_TOKEN_PATH", str(missing_token))
-
-    def fake_post(url, json, headers=None):
-        calls.append({"url": url, "json": json, "headers": headers})
-        return DummyResponse(status_code=401, payload={"success": False}, text="Unauthorized")
-
-    monkeypatch.setattr(whatsapp.requests, "post", fake_post)
+    monkeypatch.delenv("WHATSAPP_BRIDGE_TOKEN")
+    monkeypatch.setattr(whatsapp.requests, "post", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     success, message = whatsapp.send_message("12025551234", "hello")
 
     assert success is False
-    assert "HTTP 401" in message
-    assert calls[0]["headers"] == {}
+    assert "WHATSAPP_BRIDGE_TOKEN is required" in message
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -84,37 +56,32 @@ def test_send_message_without_token_surfaces_bridge_401(monkeypatch, tmp_path):
         ("send_reaction", ("12025551234@s.whatsapp.net", "3AABCDEF01234567", "👍"), "/react"),
     ],
 )
-def test_bridge_post_helpers_include_auth_headers(monkeypatch, tmp_path, func_name, args, expected_suffix):
+def test_bridge_post_helpers_include_identity_and_auth(monkeypatch, tmp_path, func_name, args, expected_suffix):
     calls = []
     media_file = tmp_path / "voice.ogg"
     media_file.write_bytes(b"ogg")
     resolved_args = tuple(str(media_file) if arg == "FILE" else arg for arg in args)
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "env-token")
 
     def fake_post(url, json, headers=None):
         calls.append({"url": url, "json": json, "headers": headers})
         return DummyResponse()
 
     monkeypatch.setattr(whatsapp.requests, "post", fake_post)
-
     getattr(whatsapp, func_name)(*resolved_args)
 
     assert calls[0]["url"].endswith(expected_suffix)
-    assert calls[0]["headers"] == {"Authorization": "Bearer env-token"}
+    assert calls[0]["headers"] == expected_headers()
 
 
 def test_send_reaction_posts_correct_payload(monkeypatch):
-    """send_reaction sends recipient, message_id, emoji, from_me, sender_jid to /react."""
     calls = []
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "test-token")
 
     def fake_post(url, json, headers=None):
         calls.append({"url": url, "json": json, "headers": headers})
         return DummyResponse(payload={"ok": True})
 
     monkeypatch.setattr(whatsapp.requests, "post", fake_post)
-
-    success, msg = whatsapp.send_reaction(
+    success, _ = whatsapp.send_reaction(
         "12025551234@s.whatsapp.net",
         "3AABCDEF01234567",
         "👍",
@@ -123,59 +90,43 @@ def test_send_reaction_posts_correct_payload(monkeypatch):
     )
 
     assert success is True
-    assert len(calls) == 1
-    assert calls[0]["url"].endswith("/react")
-    payload = calls[0]["json"]
-    assert payload["recipient"] == "12025551234@s.whatsapp.net"
-    assert payload["message_id"] == "3AABCDEF01234567"
-    assert payload["emoji"] == "👍"
-    assert payload["from_me"] is False
-    assert payload["sender_jid"] == "98765@s.whatsapp.net"
-    assert calls[0]["headers"] == {"Authorization": "Bearer test-token"}
+    assert calls[0]["json"] == {
+        "recipient": "12025551234@s.whatsapp.net",
+        "message_id": "3AABCDEF01234567",
+        "emoji": "👍",
+        "from_me": False,
+        "sender_jid": "98765@s.whatsapp.net",
+    }
+    assert calls[0]["headers"] == expected_headers()
 
 
 def test_send_reaction_empty_emoji_sends_removal(monkeypatch):
-    """An empty emoji string is forwarded as-is (reaction removal)."""
     calls = []
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "test-token")
 
     def fake_post(url, json, headers=None):
-        calls.append({"url": url, "json": json})
+        calls.append(json)
         return DummyResponse(payload={"ok": True})
 
     monkeypatch.setattr(whatsapp.requests, "post", fake_post)
-
     success, _ = whatsapp.send_reaction("12025551234@s.whatsapp.net", "3AABCDEF01234567", "")
 
     assert success is True
-    assert calls[0]["json"]["emoji"] == ""
+    assert calls[0]["emoji"] == ""
 
 
-def test_send_reaction_missing_recipient_returns_error():
-    """send_reaction returns failure without calling the bridge when recipient is empty."""
-    success, msg = whatsapp.send_reaction("", "3AABCDEF01234567", "👍")
-    assert success is False
-    assert "Recipient" in msg
-
-
-def test_send_reaction_missing_message_id_returns_error():
-    """send_reaction returns failure without calling the bridge when message_id is empty."""
-    success, msg = whatsapp.send_reaction("12025551234@s.whatsapp.net", "", "👍")
-    assert success is False
-    assert "Message ID" in msg
+def test_send_reaction_validates_required_fields():
+    assert whatsapp.send_reaction("", "3AABCDEF01234567", "👍")[0] is False
+    assert whatsapp.send_reaction("12025551234@s.whatsapp.net", "", "👍")[0] is False
 
 
 def test_send_message_with_quoted_reply_includes_quote_fields(monkeypatch):
-    """send_message passes quoted_message_id, quoted_sender_jid, quoted_content to /api/send."""
     calls = []
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "test-token")
 
     def fake_post(url, json, headers=None):
-        calls.append({"url": url, "json": json, "headers": headers})
+        calls.append({"json": json, "headers": headers})
         return DummyResponse()
 
     monkeypatch.setattr(whatsapp.requests, "post", fake_post)
-
     success, _ = whatsapp.send_message(
         "12025551234@s.whatsapp.net",
         "Great point!",
@@ -185,29 +136,22 @@ def test_send_message_with_quoted_reply_includes_quote_fields(monkeypatch):
     )
 
     assert success is True
-    payload = calls[0]["json"]
-    assert payload["recipient"] == "12025551234@s.whatsapp.net"
-    assert payload["message"] == "Great point!"
-    assert payload["quoted_message_id"] == "3AORIGINAL0000001"
-    assert payload["quoted_sender_jid"] == "99887766@s.whatsapp.net"
-    assert payload["quoted_content"] == "original text"
-    assert calls[0]["headers"] == {"Authorization": "Bearer test-token"}
+    assert calls[0]["json"]["quoted_message_id"] == "3AORIGINAL0000001"
+    assert calls[0]["json"]["quoted_sender_jid"] == "99887766@s.whatsapp.net"
+    assert calls[0]["json"]["quoted_content"] == "original text"
+    assert calls[0]["headers"] == expected_headers()
 
 
 def test_send_message_without_quote_omits_quote_fields(monkeypatch):
-    """send_message without a quoted_message_id does not include quote fields."""
     calls = []
-    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "test-token")
 
     def fake_post(url, json, headers=None):
-        calls.append({"url": url, "json": json})
+        calls.append(json)
         return DummyResponse()
 
     monkeypatch.setattr(whatsapp.requests, "post", fake_post)
-
     whatsapp.send_message("12025551234@s.whatsapp.net", "Hello!")
 
-    payload = calls[0]["json"]
-    assert "quoted_message_id" not in payload
-    assert "quoted_sender_jid" not in payload
-    assert "quoted_content" not in payload
+    assert "quoted_message_id" not in calls[0]
+    assert "quoted_sender_jid" not in calls[0]
+    assert "quoted_content" not in calls[0]

@@ -11,6 +11,7 @@ import base64
 import pytest
 
 import whatsapp
+import whatsapp_actions
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def stored(tmp_path, monkeypatch):
     def place(name: str, blob: bytes):
         path = tmp_path / name
         path.write_bytes(blob)
-        monkeypatch.setattr(whatsapp, "download_media", lambda *_: str(path))
+        monkeypatch.setattr(whatsapp_actions, "download_media", lambda *_: str(path))
         return path
 
     return place
@@ -54,7 +55,7 @@ def test_every_paintable_type_is_named_by_its_extension(stored, name, mime):
 def test_a_failed_download_says_so(monkeypatch):
     """WhatsApp expires media keys, so this is the ordinary case in a real chat and
     not an edge one — two of four images in a live thread came back this way."""
-    monkeypatch.setattr(whatsapp, "download_media", lambda *_: None)
+    monkeypatch.setattr(whatsapp_actions, "download_media", lambda *_: None)
 
     result = whatsapp.media_data_url("MSG", "chat")
 
@@ -75,7 +76,7 @@ def test_a_type_no_view_can_paint_is_refused(stored):
 
 def test_a_file_over_the_cap_is_refused_with_its_size(stored, monkeypatch):
     """The size travels back so the view can say how large rather than just no."""
-    monkeypatch.setattr(whatsapp, "MAX_INLINE_MEDIA_BYTES", 32)
+    monkeypatch.setattr(whatsapp_actions, "MAX_INLINE_MEDIA_BYTES", 32)
     stored("huge.jpg", b"x" * 64)
 
     result = whatsapp.media_data_url("MSG", "chat")
@@ -88,7 +89,7 @@ def test_a_file_over_the_cap_is_refused_with_its_size(stored, monkeypatch):
 def test_an_unreadable_file_is_reported_not_raised(tmp_path, monkeypatch):
     """The bridge can report a path it then fails to leave behind. A raise here
     would surface to the model as a tool error for what is only a missing picture."""
-    monkeypatch.setattr(whatsapp, "download_media", lambda *_: str(tmp_path / "gone.jpg"))
+    monkeypatch.setattr(whatsapp_actions, "download_media", lambda *_: str(tmp_path / "gone.jpg"))
 
     result = whatsapp.media_data_url("MSG", "chat")
 

@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # Aura sidecar image for the fused fork:
-# - Go whatsmeow bridge on :8081, including Aura cockpit management endpoints.
-# - Python MCP server on :8080 using upstream verygoodplugins transport config.
+# - Authenticated tenant gateway on :8081 supervising isolated Go runtimes.
+# - One remote Python MCP server on :8080 for every Aura tenant.
 
 FROM golang:bookworm AS bridge-build
 
@@ -35,11 +35,10 @@ RUN cd /app/whatsapp-mcp-server \
     && sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
     && chmod +x /usr/local/bin/entrypoint.sh
 
-ENV WHATSAPP_BRIDGE_HOST=0.0.0.0
-ENV WHATSAPP_BRIDGE_PORT=8081
+ENV WHATSAPP_GATEWAY_HOST=0.0.0.0
+ENV WHATSAPP_GATEWAY_PORT=8081
 ENV WHATSAPP_API_URL=http://127.0.0.1:8081/api
-ENV WHATSAPP_DB_PATH=/app/whatsapp-bridge/store/messages.db
-ENV WHATSMEOW_DB_PATH=/app/whatsapp-bridge/store/whatsapp.db
+ENV WHATSAPP_STORE_ROOT=/app/whatsapp-bridge/store
 ENV WHATSAPP_MCP_TRANSPORT=http
 ENV WHATSAPP_MCP_HOST=0.0.0.0
 ENV WHATSAPP_MCP_PORT=8080
@@ -49,6 +48,6 @@ ENV WHATSAPP_MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,http://[:
 EXPOSE 8080 8081
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://localhost:8081/api/status || exit 1
+    CMD curl -fsS http://localhost:8081/healthz || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

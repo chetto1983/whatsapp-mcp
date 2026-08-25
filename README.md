@@ -360,57 +360,49 @@ Copy `.env.example` to `.env` and configure as needed:
 
 | Variable               | Default                                  | Description                                  |
 | ---------------------- | ---------------------------------------- | -------------------------------------------- |
-| `WHATSAPP_BRIDGE_PORT` | `8080`                                   | Port for Go bridge REST API                  |
-| `WEBHOOK_URL`          | `http://localhost:8769/whatsapp/webhook` | Webhook for incoming messages                |
-| `FORWARD_SELF`         | `true`                                   | Forward messages sent by self                |
-| `WHATSAPP_DB_PATH`     | `../whatsapp-bridge/store/messages.db`   | Path to SQLite database                      |
-| `WHATSMEOW_DB_PATH`    | `../whatsapp-bridge/store/whatsapp.db`   | whatsmeow DB used for LID ↔ phone resolution |
-| `WHATSAPP_API_URL`     | `http://localhost:8080/api`              | Go bridge REST API URL                       |
-| `WHATSAPP_BRIDGE_TOKEN` | generated next to `WHATSMEOW_DB_PATH` as `.bridge-token` | Bearer token required for bridge REST calls |
-| `WHATSAPP_MEDIA_ROOTS` | `~/.local/share/whatsapp-mcp/outbox`     | Path-list of directories allowed for outbound media files |
-| `WHATSAPP_MCP_TRANSPORT` | `stdio`                                | MCP transport to serve clients: `stdio`, `http`, or `sse` |
-| `WHATSAPP_MCP_HOST`    | `127.0.0.1`                              | Bind address for the `http`/`sse` transports |
-| `WHATSAPP_MCP_PORT`    | `8000`                                   | Port for the `http`/`sse` transports |
+| `WHATSAPP_STORE_ROOT`  | `../whatsapp-bridge/store`               | Persistent root containing `tenants/<uuid>/store` |
+| `WHATSAPP_MIGRATION_TENANT_ID` | none | Explicit UUID that owns a pre-upgrade singleton `store`; required only for that one-shot move |
+| `WHATSAPP_GATEWAY_PORT` | `8081`                                  | Authenticated tenant gateway port            |
+| `WHATSAPP_API_URL`     | `http://localhost:8081/api`              | Internal tenant gateway URL                  |
+| `WHATSAPP_BRIDGE_TOKEN` | none                                    | Required bearer shared only by MCP and gateway |
+| `WHATSAPP_MCP_SERVICE_TOKEN` | none                               | Required bearer for the remote MCP transport |
+| `WHATSAPP_MCP_PUBLIC_URL` | `http://localhost:8080`              | Public resource URL used by MCP auth metadata |
+| `WHATSAPP_MCP_TRANSPORT` | `http`                                 | Streamable HTTP; other transports are rejected |
+| `WHATSAPP_MCP_HOST`    | `127.0.0.1`                              | Remote MCP bind address                      |
+| `WHATSAPP_MCP_PORT`    | `8000`                                   | Remote MCP port                              |
 | `WHATSAPP_MCP_ALLOWED_HOSTS` | localhost patterns, plus Compose names when binding `0.0.0.0` | Comma-separated Host header allow-list for DNS rebinding protection |
 | `WHATSAPP_MCP_ALLOWED_ORIGINS` | localhost patterns, plus Compose names when binding `0.0.0.0` | Comma-separated Origin header allow-list for DNS rebinding protection |
-| `WHATSAPP_MCP_STATELESS` | `true` | Streamable-HTTP only: serve the 2026-07-28 stateless core (no `Mcp-Session-Id`). Set `false` to keep session-bearing transport for a pre-2026 host |
 
-### MCP transport (stdio vs http/sse)
+### Aura remote MCP tenancy
 
-By default the server speaks MCP over **stdio**, which is what local clients
-like Claude Desktop and Cursor launch. To serve the server over the network
-instead, set `WHATSAPP_MCP_TRANSPORT`:
+This fork exposes one authenticated, stateless Streamable HTTP MCP at `/mcp`.
+It does not create one MCP registration per tenant. Aura stamps the authenticated
+principal into each tool call as `_meta.aura.user_identifier`; the value must be
+a UUID and is never accepted from a model-visible tool argument or HTTP identity
+header.
 
 ```bash
-# Streamable HTTP (current spec transport for remote MCP), endpoint at /mcp
-WHATSAPP_MCP_TRANSPORT=http WHATSAPP_MCP_PORT=8000 uv run main.py
-
-# Legacy Server-Sent Events transport (deprecated in the MCP spec), endpoint at /sse
-WHATSAPP_MCP_TRANSPORT=sse uv run main.py
+WHATSAPP_MCP_SERVICE_TOKEN='remote-secret' \
+WHATSAPP_BRIDGE_TOKEN='internal-secret' \
+WHATSAPP_MCP_TRANSPORT=http \
+uv run main.py
 ```
 
-`http` is an alias for the spec's `streamable-http` transport and is the
-recommended choice for remote connections; `sse` is kept for older clients.
+The gateway starts one internal WhatsMeow runtime per identity. Each runtime's
+message database, WhatsMeow session database, QR state and media are rooted at
+`tenants/<uuid>/store`; there is no singleton runtime fallback. Every gateway
+request requires the internal bearer plus `X-Aura-Identity`, which the MCP
+derives only from the validated `_meta` value.
 
-> **Security:** `WHATSAPP_MCP_HOST` defaults to `127.0.0.1`, so the HTTP/SSE
-> server is reachable only from the local machine. The server has no built-in
-> authentication, and the underlying bridge can read and send WhatsApp messages
-> on your account. Only bind to a non-loopback address (e.g. `0.0.0.0`) if you
-> place an authenticating reverse proxy or tunnel in front of it.
+For an upgrade, `WHATSAPP_MIGRATION_TENANT_ID` moves every existing singleton
+file into that UUID before the gateway starts. It refuses merges and removes the
+retired `.bridge-token`; the deployment tokens come only from environment secrets.
 
 ### Bridge authentication and media paths
 
-The bridge requires bearer-token authentication for every `/api/*` request and
-accepts only exact loopback Host headers for its configured port. This protects
-the local REST API from other local processes and browser DNS-rebinding attacks.
-
-On first start, the bridge generates a 256-bit token, writes it to
-`.bridge-token` in the active bridge store directory with owner-only
-permissions, and prints a setup banner. The MCP server reads
-`WHATSAPP_BRIDGE_TOKEN` first, then falls back to `.bridge-token` in the same
-directory as `WHATSMEOW_DB_PATH`. For split deployments, containers, or process
-managers that do not share the store directory, set the same
-`WHATSAPP_BRIDGE_TOKEN` value for both the bridge and MCP server.
+The fused container requires `WHATSAPP_BRIDGE_TOKEN`; it does not read a token
+from any tenant store. Internal bridges bind random loopback ports and the
+gateway is the only externally reachable management/data plane.
 
 Outbound `media_path` values are confined to `WHATSAPP_MEDIA_ROOTS`. The default
 outbox is `~/.local/share/whatsapp-mcp/outbox`, created on bridge startup. Move
@@ -692,13 +684,13 @@ are documented in [docs/RELEASING.md](docs/RELEASING.md).
 - **QR Code Not Displaying**: Restart the bridge. Check terminal QR code support.
 - **Device Limit Reached**: Remove a linked device from WhatsApp Settings > Linked Devices.
 - **No Messages Loading**: Initial sync can take several minutes for large chat histories.
-- **Out of Sync**: Back up `whatsapp-bridge/store`, then move
-  `whatsapp-bridge/store/whatsapp.db` aside and re-authenticate. Keep
+- **Out of Sync**: Back up `whatsapp-bridge/store/tenants/<uuid>/store`, then move
+  that tenant's `whatsapp.db` aside and re-authenticate. Keep
   `messages.db` unless you intentionally want to discard local message history.
-- **Bridge returns 401 Unauthorized**: Restart the bridge so it creates
-  `.bridge-token` next to `WHATSMEOW_DB_PATH`, then restart the MCP server. If
-  the MCP server cannot read that file, set `WHATSAPP_BRIDGE_TOKEN` to the same
-  value in both environments.
+- **MCP returns 401 Unauthorized**: Send `WHATSAPP_MCP_SERVICE_TOKEN` as the
+  transport bearer. The internal bridge token is not a client credential.
+- **Gateway returns 400 for identity**: Verify Aura attached a UUID at
+  `_meta.aura.user_identifier`; do not add a tool argument or client header.
 - **Bridge returns 403 Forbidden for Host**: Use `WHATSAPP_API_URL` with
   `http://127.0.0.1:<port>/api`, `http://localhost:<port>/api`, or
   `http://[::1]:<port>/api`; custom hostnames and missing ports are rejected.
