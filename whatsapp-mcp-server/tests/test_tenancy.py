@@ -3,16 +3,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from mcp.server.auth.provider import AccessToken
 from mcp.shared.exceptions import MCPError
 
 import tenant_context
 import whatsapp
 from store_migration import migrate_singleton_store
 from tenant_context import (
-    AuraIdentityMiddleware,
+    SubjectTenantMiddleware,
     TenantFile,
     current_identity,
-    identity_from_meta,
     normalize_identity,
     tenant_scope,
     tenant_store,
@@ -40,13 +40,10 @@ def _seed_chat(identity: str, name: str) -> Path:
         return path
 
 
-def test_identity_is_canonical_and_only_read_from_meta():
+def test_identity_is_canonical():
     assert normalize_identity(TENANT_A.upper()) == TENANT_A
-    assert identity_from_meta({"aura": {"user_identifier": TENANT_A}}) == TENANT_A
-    with pytest.raises(ValueError, match="required"):
-        identity_from_meta({})
     with pytest.raises(ValueError, match="UUID"):
-        identity_from_meta({"aura": {"user_identifier": "alice"}})
+        normalize_identity("alice")
 
 
 def test_tenant_file_has_no_context_fallback():
@@ -62,9 +59,14 @@ def test_tenant_file_has_no_context_fallback():
 
 
 @pytest.mark.asyncio
-async def test_middleware_binds_identity_for_tool_call():
-    middleware = AuraIdentityMiddleware()
-    ctx = SimpleNamespace(method="tools/call", meta={"aura": {"user_identifier": TENANT_B}})
+async def test_middleware_binds_identity_for_tool_call(monkeypatch):
+    middleware = SubjectTenantMiddleware()
+    ctx = SimpleNamespace(method="tools/call", meta=None)
+    monkeypatch.setattr(
+        tenant_context,
+        "get_access_token",
+        lambda: AccessToken(token="token", client_id="client", scopes=["mcp:tools"], subject=TENANT_B),
+    )
 
     async def call_next(_ctx):
         return {"identity": current_identity()}
@@ -73,16 +75,21 @@ async def test_middleware_binds_identity_for_tool_call():
 
 
 @pytest.mark.asyncio
-async def test_middleware_rejects_missing_identity_before_tool():
-    middleware = AuraIdentityMiddleware()
+async def test_middleware_rejects_missing_subject_before_tool(monkeypatch):
+    middleware = SubjectTenantMiddleware()
     ctx = SimpleNamespace(method="tools/call", meta=None)
+    monkeypatch.setattr(
+        tenant_context,
+        "get_access_token",
+        lambda: None,
+    )
     called = False
 
     async def call_next(_ctx):
         nonlocal called
         called = True
 
-    with pytest.raises(MCPError, match="user_identifier is required"):
+    with pytest.raises(MCPError, match="OAuth subject is required"):
         await middleware(ctx, call_next)
     assert called is False
 

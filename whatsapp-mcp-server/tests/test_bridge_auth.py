@@ -1,7 +1,7 @@
 import pytest
 
 import whatsapp
-from tenant_context import AURA_IDENTITY_HEADER
+from tenant_context import TENANT_ID_HEADER
 
 TEST_IDENTITY = "11111111-1111-4111-8111-111111111111"
 TEST_BRIDGE_TOKEN = "bridge-token-for-tests"
@@ -20,7 +20,7 @@ class DummyResponse:
 def expected_headers():
     return {
         "Authorization": f"Bearer {TEST_BRIDGE_TOKEN}",
-        AURA_IDENTITY_HEADER: TEST_IDENTITY,
+        TENANT_ID_HEADER: TEST_IDENTITY,
     }
 
 

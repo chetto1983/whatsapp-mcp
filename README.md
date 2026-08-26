@@ -365,25 +365,28 @@ Copy `.env.example` to `.env` and configure as needed:
 | `WHATSAPP_GATEWAY_PORT` | `8081`                                  | Authenticated tenant gateway port            |
 | `WHATSAPP_API_URL`     | `http://localhost:8081/api`              | Internal tenant gateway URL                  |
 | `WHATSAPP_BRIDGE_TOKEN` | none                                    | Required bearer shared only by MCP and gateway |
-| `WHATSAPP_MCP_SERVICE_TOKEN` | none                               | Required bearer for the remote MCP transport |
-| `WHATSAPP_MCP_PUBLIC_URL` | `http://localhost:8080`              | Public resource URL used by MCP auth metadata |
+| `MCP_OAUTH_ISSUER` | `http://localhost:9080` | Authorization-server issuer |
+| `MCP_OAUTH_JWKS_URL` | `<issuer>/oauth/jwks` | JWKS endpoint used to verify access tokens |
+| `MCP_OAUTH_RESOURCE` | `http://localhost:8080/mcp/` | Canonical MCP resource and required token audience |
 | `WHATSAPP_MCP_TRANSPORT` | `http`                                 | Streamable HTTP; other transports are rejected |
 | `WHATSAPP_MCP_HOST`    | `127.0.0.1`                              | Remote MCP bind address                      |
 | `WHATSAPP_MCP_PORT`    | `8000`                                   | Remote MCP port                              |
 | `WHATSAPP_MCP_ALLOWED_HOSTS` | localhost patterns, plus Compose names when binding `0.0.0.0` | Comma-separated Host header allow-list for DNS rebinding protection |
 | `WHATSAPP_MCP_ALLOWED_ORIGINS` | localhost patterns, plus Compose names when binding `0.0.0.0` | Comma-separated Origin header allow-list for DNS rebinding protection |
 
-### Aura remote MCP tenancy
+### OAuth tenant isolation
 
-This fork exposes one authenticated, stateless Streamable HTTP MCP at `/mcp`.
-It does not create one MCP registration per tenant. Aura stamps the authenticated
-principal into each tool call as `_meta.aura.user_identifier`; the value must be
-a UUID and is never accepted from a model-visible tool argument or HTTP identity
-header.
+This fork exposes one OAuth-protected, stateless Streamable HTTP MCP at `/mcp`.
+It publishes MCP Protected Resource Metadata and accepts signed, audience-bound
+access tokens from any configured authorization server. The standard OAuth `sub`
+claim selects the tenant; it must be a UUID. No client-supplied tool argument,
+MCP metadata field, or tenant header can override it.
 
 ```bash
-WHATSAPP_MCP_SERVICE_TOKEN='remote-secret' \
 WHATSAPP_BRIDGE_TOKEN='internal-secret' \
+MCP_OAUTH_ISSUER='https://auth.example' \
+MCP_OAUTH_JWKS_URL='https://auth.example/oauth/jwks' \
+MCP_OAUTH_RESOURCE='https://whatsapp.example/mcp/' \
 WHATSAPP_MCP_TRANSPORT=http \
 uv run main.py
 ```
@@ -391,12 +394,12 @@ uv run main.py
 The gateway starts one internal WhatsMeow runtime per identity. Each runtime's
 message database, WhatsMeow session database, QR state and media are rooted at
 `tenants/<uuid>/store`; there is no singleton runtime fallback. Every gateway
-request requires the internal bearer plus `X-Aura-Identity`, which the MCP
-derives only from the validated `_meta` value.
+request requires the internal bearer plus `X-Tenant-ID`, which the MCP derives
+only from the verified OAuth subject.
 
 For an upgrade, `WHATSAPP_MIGRATION_TENANT_ID` moves every existing singleton
 file into that UUID before the gateway starts. It refuses merges and removes the
-retired `.bridge-token`; the deployment tokens come only from environment secrets.
+retired `.bridge-token`; the internal gateway token comes only from deployment secrets.
 
 ### Bridge authentication and media paths
 
@@ -687,10 +690,10 @@ are documented in [docs/RELEASING.md](docs/RELEASING.md).
 - **Out of Sync**: Back up `whatsapp-bridge/store/tenants/<uuid>/store`, then move
   that tenant's `whatsapp.db` aside and re-authenticate. Keep
   `messages.db` unless you intentionally want to discard local message history.
-- **MCP returns 401 Unauthorized**: Send `WHATSAPP_MCP_SERVICE_TOKEN` as the
-  transport bearer. The internal bridge token is not a client credential.
-- **Gateway returns 400 for identity**: Verify Aura attached a UUID at
-  `_meta.aura.user_identifier`; do not add a tool argument or client header.
+- **MCP returns 401 Unauthorized**: Complete the MCP client's discovered OAuth
+  login. The internal bridge token is not a client credential.
+- **Gateway returns 400 for identity**: Verify the authorization server issued a
+  UUID in the standard `sub` claim; do not add a tool argument or client header.
 - **Bridge returns 403 Forbidden for Host**: Use `WHATSAPP_API_URL` with
   `http://127.0.0.1:<port>/api`, `http://localhost:<port>/api`, or
   `http://[::1]:<port>/api`; custom hostnames and missing ports are rejected.

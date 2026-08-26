@@ -8,7 +8,7 @@ from typing import Any
 import requests
 
 import audio
-from tenant_context import AURA_IDENTITY_HEADER, current_identity
+from tenant_context import TENANT_ID_HEADER, current_identity
 
 WHATSAPP_API_BASE_URL = os.getenv("WHATSAPP_API_URL", "http://localhost:8081/api")
 
@@ -23,7 +23,7 @@ def _read_bridge_token() -> str:
 def _bridge_headers() -> dict[str, str]:
     return {
         "Authorization": f"Bearer {_read_bridge_token()}",
-        AURA_IDENTITY_HEADER: current_identity(),
+        TENANT_ID_HEADER: current_identity(),
     }
 
 

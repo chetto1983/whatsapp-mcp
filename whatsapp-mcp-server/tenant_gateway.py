@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import requests
 
 from store_migration import migrate_from_environment
-from tenant_context import AURA_IDENTITY_HEADER, normalize_identity, store_root
+from tenant_context import TENANT_ID_HEADER, normalize_identity, store_root
 
 
 def bridge_token() -> str:
@@ -67,7 +67,7 @@ class RuntimeRegistry:
 
     def _start(self, identity: str) -> TenantRuntime:
         tenant_root = self.root / "tenants" / identity
-        tenant_root.mkdir(parents=True, exist_ok=True)
+        (tenant_root / "store").mkdir(parents=True, exist_ok=True)
         port = _free_port()
         env = os.environ.copy()
         env.update(
@@ -148,7 +148,7 @@ class TenantGatewayHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         try:
-            identity = normalize_identity(self.headers.get(AURA_IDENTITY_HEADER))
+            identity = normalize_identity(self.headers.get(TENANT_ID_HEADER))
             runtime = self.registry.get(identity)
             body_size = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(body_size) if body_size else None

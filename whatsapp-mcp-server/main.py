@@ -19,8 +19,8 @@ from mcp.server.mcpserver import MCPServer
 
 from apps_ui import CLIENT_URI, build_apps, openai_alias
 from mcp_config import resolve_run_kwargs, resolve_transport
-from mcp_security import ServiceTokenVerifier, auth_settings, service_token
-from tenant_context import AuraIdentityMiddleware
+from mcp_security import JWTTokenVerifier, OAuthConfig, auth_settings
+from tenant_context import SubjectTenantMiddleware
 from whatsapp import (
     download_media as whatsapp_download_media,
 )
@@ -151,12 +151,13 @@ def list_chats(
     return chats
 
 
+oauth_config = OAuthConfig.from_environment()
 mcp = MCPServer(
     "whatsapp",
     extensions=[apps],
-    auth=auth_settings(),
-    token_verifier=ServiceTokenVerifier(),
-    middleware=[AuraIdentityMiddleware()],
+    auth=auth_settings(oauth_config),
+    token_verifier=JWTTokenVerifier(oauth_config),
+    middleware=[SubjectTenantMiddleware()],
 )
 
 
@@ -476,12 +477,7 @@ if __name__ == "__main__":
     # Register signal handlers for clean shutdown
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
-    try:
-        service_token()
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from None
-
-    # This Aura fork is a remote MCP and exposes current stateless Streamable HTTP only.
+    # This fork is a remote MCP and exposes current stateless Streamable HTTP only.
     try:
         transport = resolve_transport(os.getenv("WHATSAPP_MCP_TRANSPORT"))
         run_kwargs = resolve_run_kwargs(

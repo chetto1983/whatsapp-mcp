@@ -15,8 +15,8 @@ DEFAULT_MCP_HOST = "127.0.0.1"
 DEFAULT_MCP_PORT = 8000
 LOCALHOST_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
 LOCALHOST_ALLOWED_ORIGINS = ("http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*")
-COMPOSE_ALLOWED_HOSTS = ("whatsapp:*", "aura-whatsapp:*")
-COMPOSE_ALLOWED_ORIGINS = ("http://whatsapp:*", "http://aura-whatsapp:*")
+COMPOSE_ALLOWED_HOSTS = ("whatsapp:*",)
+COMPOSE_ALLOWED_ORIGINS = ("http://whatsapp:*",)
 
 
 def resolve_transport(value: str | None) -> str:
@@ -31,7 +31,7 @@ def resolve_transport(value: str | None) -> str:
     except KeyError:
         accepted = ", ".join(sorted(TRANSPORT_ALIASES))
         raise ValueError(
-            f"Invalid WHATSAPP_MCP_TRANSPORT={value!r}; this Aura fork is remote-only "
+            f"Invalid WHATSAPP_MCP_TRANSPORT={value!r}; this fork is remote-only "
             f"(accepted Streamable HTTP inputs: {accepted})"
         ) from None
 
@@ -76,7 +76,7 @@ def resolve_run_kwargs(
 ) -> dict[str, Any]:
     """Build the keyword arguments for `MCPServer.run()` on a given transport.
 
-    This Aura fork exposes the current stateless Streamable HTTP transport only.
+    This fork exposes the current stateless Streamable HTTP transport only.
 
     Raises:
         ValueError: If the host/port/stateless values are unusable.

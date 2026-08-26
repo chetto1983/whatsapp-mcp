@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-# Aura sidecar image for the fused fork:
+# Fused remote MCP image:
 # - Authenticated tenant gateway on :8081 supervising isolated Go runtimes.
-# - One remote Python MCP server on :8080 for every Aura tenant.
+# - One remote Python MCP server on :8080 for every OAuth subject.
 
 FROM golang:bookworm AS bridge-build
 
@@ -42,8 +42,8 @@ ENV WHATSAPP_STORE_ROOT=/app/whatsapp-bridge/store
 ENV WHATSAPP_MCP_TRANSPORT=http
 ENV WHATSAPP_MCP_HOST=0.0.0.0
 ENV WHATSAPP_MCP_PORT=8080
-ENV WHATSAPP_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,whatsapp:*,aura-whatsapp:*
-ENV WHATSAPP_MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,http://[::1]:*,http://whatsapp:*,http://aura-whatsapp:*
+ENV WHATSAPP_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,whatsapp:*
+ENV WHATSAPP_MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,http://[::1]:*,http://whatsapp:*
 
 EXPOSE 8080 8081
 

@@ -7,7 +7,7 @@ TEST_BRIDGE_TOKEN = "bridge-token-for-tests"
 
 
 @pytest.fixture(autouse=True)
-def aura_tenant_context(tmp_path, monkeypatch):
+def tenant_context(tmp_path, monkeypatch):
     monkeypatch.setenv("WHATSAPP_STORE_ROOT", str(tmp_path / "whatsapp-root"))
     monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN)
     with tenant_scope(TEST_IDENTITY):

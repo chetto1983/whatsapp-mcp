@@ -21,6 +21,7 @@ dependencies = [
     # `mcp.server.fastmcp` outright, so this floor is a requirement, not a
     # preference. The SDK provides its own `httpx2` transport client.
     "mcp>=2.0.0",
+    "pyjwt[crypto]>=2.13.0",
     "requests>=2.34.2",
     "anyio<4.14",
 ]

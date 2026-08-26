@@ -935,6 +935,7 @@ dependencies = [
     { name = "anyio", version = "4.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
     { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
     { name = "mcp" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "requests" },
 ]
 
@@ -949,6 +950,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = "<4.14" },
     { name = "mcp", specifier = ">=2.0.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.13.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "requests", specifier = ">=2.34.2" },
