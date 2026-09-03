@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.1...v0.3.0) (2026-09-03)
+
+
+### Features
+
+* isolate WhatsApp MCP by Aura identity ([0162170](https://github.com/chetto1983/whatsapp-mcp/commit/0162170940cfc9f0c1944c42d8365f352c71e0a6))
+* **oauth:** trust more than one authorization server, key tenants on (iss, sub) ([081da94](https://github.com/chetto1983/whatsapp-mcp/commit/081da9403645270a3f7a1b6e73290401e6694b52))
+
+
+### Bug Fixes
+
+* isolate OAuth MCP tenants by token subject ([a463da5](https://github.com/chetto1983/whatsapp-mcp/commit/a463da57dd7afd243b2db8827dd26891b661df7e))
+* **oauth:** let one server answer to every name it is reachable under ([6aaa87d](https://github.com/chetto1983/whatsapp-mcp/commit/6aaa87d4b72ff54bc9c51987f247f5eea777498f))
+
+
+### Documentation
+
+* **security:** record the 0.2.1 media path fixes and upstream status ([e0b8345](https://github.com/chetto1983/whatsapp-mcp/commit/e0b83459ebd0a3b870f0823e317081022f1da00f))
+* **security:** record the 0.2.1 media path fixes and upstream status ([11023c8](https://github.com/chetto1983/whatsapp-mcp/commit/11023c864da00478fd2219b59370ba4cc03190ab))
+
 ## [0.2.1](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.0...v0.2.1) (2026-08-22)
 
 
