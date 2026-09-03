@@ -21,6 +21,11 @@ SUPPORTED_JWT_ALGORITHMS = ("EdDSA", "RS256", "PS256", "ES256")
 # server serves them here; a foreign issuer that does not (Google, Keycloak) has to be
 # declared with an explicit `issuer=jwks_url` pair.
 DEFAULT_JWKS_PATH = "/oauth/jwks"
+# Kept WITH the trailing slash, matching the sibling arcadedb-mcp's own default. The
+# spec's canonical form drops it (2026-07-28, "Canonical Server URI"), but every
+# deployment sets MCP_OAUTH_RESOURCE explicitly, so changing this would move nothing
+# except someone's existing single-name setup.
+DEFAULT_RESOURCE = "http://localhost:8080/mcp/"
 # Anchors the identity derivation below. Computed from a fixed URL rather than written
 # as a literal, so the value is reproducible by reading this line and nobody has to
 # trust a magic constant they cannot re-derive.
@@ -67,6 +72,33 @@ def parse_trusted_issuers(raw: str) -> tuple[TrustedIssuer, ...]:
     return tuple(issuers)
 
 
+def split_audiences(raw: str) -> tuple[str, ...]:
+    """Read MCP_OAUTH_RESOURCE as a comma-separated list, so one server can answer to the
+    several names it is reachable under. The FIRST entry is canonical: it is the only one
+    advertised, and MCP clients treat it as the server's ADDRESS. The rest are merely
+    accepted as token audiences.
+
+    Both halves are load-bearing, measured 2026-09-02 on the sibling arcadedb-mcp and
+    again here on 2026-09-03:
+
+      - advertising the CONTAINER name made a host MCP client take it for the server's
+        address and fail with `getaddrinfo ENOTFOUND whatsapp` before authentication
+        could even begin;
+      - advertising ONLY the loopback name would break the in-container agent, because
+        Aura pins its self-issued grant's audience to the URL it dials -- observed in
+        its own log as `Post "http://whatsapp:8080/mcp/"`.
+
+    Accepting both is what lets one server answer both callers. This stays OUR job: the
+    SDK's AuthSettings.resource_server_url is a single value serving as "the resource
+    identifier AND base route to look up OAuth Protected Resource Metadata", with no
+    option for several names (python-sdk issue #1264, open).
+
+    Always returns at least one element, so callers need no emptiness check.
+    """
+    audiences = tuple(entry.strip() for entry in (raw or "").split(",") if entry.strip())
+    return audiences or (DEFAULT_RESOURCE,)
+
+
 @dataclass(frozen=True)
 class OAuthConfig:
     # Every authorization server whose tokens are accepted, HOME FIRST. A tuple rather
@@ -76,7 +108,15 @@ class OAuthConfig:
     # exactly one was never a protocol requirement -- it was this server assuming that
     # everyone who talks to it is already a registered Aura user.
     issuers: tuple[TrustedIssuer, ...]
+    # The CANONICAL resource identifier: the one advertised in the protected-resource
+    # metadata, which MCP clients also treat as the server's address. It must therefore
+    # be a URL the CLIENT can reach.
     resource: str
+    # Every resource identifier a token may legitimately carry, canonical first. Empty
+    # means "only the canonical one", so a config built literally -- the tests, and any
+    # caller that sets `resource` alone -- keeps the single-audience behaviour instead of
+    # silently accepting nothing.
+    audiences: tuple[str, ...] = ()
 
     @classmethod
     def from_environment(cls) -> OAuthConfig:
@@ -84,10 +124,17 @@ class OAuthConfig:
             os.getenv("MCP_OAUTH_ISSUER", "http://localhost:9080"),
             os.getenv("MCP_OAUTH_JWKS_URL", ""),
         )
+        audiences = split_audiences(os.getenv("MCP_OAUTH_RESOURCE", DEFAULT_RESOURCE))
         return cls(
             issuers=(home, *parse_trusted_issuers(os.getenv("MCP_OAUTH_TRUSTED_ISSUERS", ""))),
-            resource=os.getenv("MCP_OAUTH_RESOURCE", "http://localhost:8080/mcp/"),
+            resource=audiences[0],
+            audiences=audiences,
         )
+
+    @property
+    def accepted_audiences(self) -> tuple[str, ...]:
+        """The audience allow-list, falling back to the canonical resource alone."""
+        return self.audiences or (self.resource,)
 
     @property
     def home(self) -> TrustedIssuer:
@@ -149,8 +196,9 @@ class JWTTokenVerifier:
             for issuer in config.issuers
         }
         logger.info(
-            "OAuth resource verifier configured resource=%s issuers=%s",
+            "OAuth resource verifier configured resource=%s audiences=%s issuers=%s",
             config.resource,
+            list(config.accepted_audiences),
             [issuer.issuer for issuer in config.issuers],
         )
 
@@ -188,7 +236,12 @@ class JWTTokenVerifier:
             token,
             signing_key,
             algorithms=list(SUPPORTED_JWT_ALGORITHMS),
-            audience=self._config.resource,
+            # PyJWT accepts an iterable and requires the token to name ANY of them
+            # (api_jwt._validate_aud), which is exactly the intersection rule this list
+            # is for. A token carrying no `aud` still fails: it is required just below,
+            # and a bearer bound to nothing is replayable against every resource that
+            # trusts this issuer.
+            audience=list(self._config.accepted_audiences),
             issuer=issuer.issuer,
             options={"require": ["exp", "iss", "aud", "sub", "scope", "client_id"]},
         )

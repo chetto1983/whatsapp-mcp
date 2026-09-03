@@ -9,7 +9,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from mcp_security import MCP_TOOLS_SCOPE, JWTTokenVerifier, OAuthConfig, TrustedIssuer, auth_settings
+from mcp_security import (
+    DEFAULT_RESOURCE,
+    MCP_TOOLS_SCOPE,
+    JWTTokenVerifier,
+    OAuthConfig,
+    TrustedIssuer,
+    auth_settings,
+    split_audiences,
+)
 
 TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 ISSUER = "https://auth.example"
@@ -199,3 +207,117 @@ def test_trusted_issuers_are_read_from_the_environment(monkeypatch):
         # No `=`, so the default path applies -- the same rule the home issuer follows.
         TrustedIssuer("https://kc.example/realms/aura", "https://kc.example/realms/aura/oauth/jwks"),
     )
+
+
+# --- One server, several names ----------------------------------------------
+#
+# The failure these prevent, measured 2026-09-03: whatsapp-mcp advertised only its
+# Compose name, so a host MCP client took `http://whatsapp:8080/mcp/` for the server
+# address and died with `getaddrinfo ENOTFOUND whatsapp` before authentication could
+# start. Advertising only the loopback name instead would break the in-container agent,
+# whose self-issued grant is bound to the name it dials. Both must hold at once.
+
+INTERNAL_RESOURCE = "http://server.internal:8080/mcp/"
+
+
+def both_names_config():
+    """Canonical first (what a host client reaches), internal second (merely accepted)."""
+    return OAuthConfig(
+        issuers=(TrustedIssuer(issuer=ISSUER, jwks_url="https://auth.example/jwks"),),
+        resource=RESOURCE,
+        audiences=(RESOURCE, INTERNAL_RESOURCE),
+    )
+
+
+def test_the_first_audience_is_the_canonical_one():
+    assert split_audiences(f" {RESOURCE} , {INTERNAL_RESOURCE} ,, ") == (RESOURCE, INTERNAL_RESOURCE)
+    assert split_audiences(RESOURCE) == (RESOURCE,)
+    # Never empty, so callers need no emptiness check.
+    assert split_audiences("") == (DEFAULT_RESOURCE,)
+    assert split_audiences("  ,  ") == (DEFAULT_RESOURCE,)
+
+
+@pytest.mark.asyncio
+async def test_a_token_for_the_internal_name_is_accepted():
+    """The in-container agent's case. Its grant names the URL it dials, which is NOT the
+    name advertised to host clients -- validating the canonical alone would lock it out."""
+    key = Ed25519PrivateKey.generate()
+    token = signed_token(key, aud=INTERNAL_RESOURCE)
+
+    accepted = await JWTTokenVerifier(both_names_config(), StaticJWKClient(key)).verify_token(token)
+
+    assert accepted is not None, "the agent dialing the internal name was refused"
+    assert accepted.subject == TENANT
+
+
+@pytest.mark.asyncio
+async def test_a_token_for_the_canonical_name_is_still_accepted():
+    """The host client's case, in the same config -- the point is that BOTH pass."""
+    key = Ed25519PrivateKey.generate()
+
+    accepted = await JWTTokenVerifier(both_names_config(), StaticJWKClient(key)).verify_token(signed_token(key))
+
+    assert accepted is not None
+
+
+@pytest.mark.asyncio
+async def test_widening_the_list_does_not_widen_it_to_everything():
+    """A list of accepted names is not "any name". The spec is explicit: servers MUST
+    only accept tokens valid for their own resources (2026-07-28, Token Handling)."""
+    key = Ed25519PrivateKey.generate()
+    stranger = signed_token(key, aud="https://elsewhere.invalid/mcp/")
+
+    assert await JWTTokenVerifier(both_names_config(), StaticJWKClient(key)).verify_token(stranger) is None
+
+
+@pytest.mark.asyncio
+async def test_a_token_bound_to_nothing_is_refused():
+    """A bearer with no audience is replayable against every resource that trusts the
+    same issuer, so an absent `aud` must fail rather than match a list."""
+    key = Ed25519PrivateKey.generate()
+    unbound = jwt.encode(
+        {
+            "iss": ISSUER,
+            "exp": int(time.time()) + 300,
+            "scope": MCP_TOOLS_SCOPE,
+            "client_id": "remote-client",
+            "sub": TENANT,
+        },
+        key,
+        algorithm="EdDSA",
+        headers={"kid": "test"},
+    )
+
+    assert await JWTTokenVerifier(both_names_config(), StaticJWKClient(key)).verify_token(unbound) is None
+
+
+@pytest.mark.asyncio
+async def test_a_config_naming_one_resource_keeps_validating_that_one():
+    """Back-compat for every caller that sets `resource` alone: the fallback must be the
+    single canonical audience, never the empty list (which would accept nothing)."""
+    key = Ed25519PrivateKey.generate()
+    config = OAuthConfig(
+        issuers=(TrustedIssuer(issuer=ISSUER, jwks_url="https://auth.example/jwks"),), resource=RESOURCE
+    )
+
+    assert config.accepted_audiences == (RESOURCE,)
+    assert await JWTTokenVerifier(config, StaticJWKClient(key)).verify_token(signed_token(key)) is not None
+
+
+def test_only_the_canonical_name_is_advertised():
+    """The advertised value IS the server's address to an MCP client, so exactly one name
+    may appear there -- the reachable one."""
+    settings = auth_settings(both_names_config())
+
+    assert str(settings.resource_server_url) == RESOURCE
+    assert INTERNAL_RESOURCE not in str(settings.resource_server_url)
+
+
+def test_the_resource_list_is_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("MCP_OAUTH_ISSUER", ISSUER)
+    monkeypatch.setenv("MCP_OAUTH_RESOURCE", f"{RESOURCE},{INTERNAL_RESOURCE}")
+
+    config = OAuthConfig.from_environment()
+
+    assert config.resource == RESOURCE, "the advertised name is not the first entry"
+    assert config.accepted_audiences == (RESOURCE, INTERNAL_RESOURCE)
