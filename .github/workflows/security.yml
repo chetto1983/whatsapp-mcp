@@ -39,7 +39,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version-file: whatsapp-bridge/go.mod
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -58,20 +58,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v7
 
-      - name: Install pip-audit
-        run: pip install pip-audit
-
-      - name: Install package dependencies
+      - name: Export the locked dependencies
         run: |
           cd whatsapp-mcp-server
-          pip install -e .
+          uv export --frozen --no-hashes --no-dev -o requirements-audit.txt
 
       - name: Audit dependencies
-        run: pip-audit
+        run: uvx pip-audit -r whatsapp-mcp-server/requirements-audit.txt --no-deps --disable-pip
         continue-on-error: true
 
   bandit:
@@ -99,7 +94,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version-file: whatsapp-bridge/go.mod
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest

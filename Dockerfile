@@ -4,7 +4,7 @@
 # - Authenticated tenant gateway on :8081 supervising isolated Go runtimes.
 # - One remote Python MCP server on :8080 for every OAuth subject.
 
-FROM golang:bookworm AS bridge-build
+FROM golang:1.27.1-bookworm AS bridge-build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
@@ -22,7 +22,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv==0.5.31
+RUN pip install --no-cache-dir uv==0.12.18
 
 WORKDIR /app
 COPY whatsapp-mcp-server/ ./whatsapp-mcp-server/

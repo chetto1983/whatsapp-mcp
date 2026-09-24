@@ -1,6 +1,7 @@
 import base64
 import json
 import time
+import warnings
 from uuid import UUID
 
 import jwt
@@ -108,6 +109,21 @@ def test_auth_settings_publish_generic_resource_contract():
     assert str(settings.issuer_url) == ISSUER
     assert str(settings.resource_server_url) == RESOURCE
     assert settings.required_scopes == [MCP_TOOLS_SCOPE]
+
+
+def test_auth_settings_leave_the_audience_check_to_the_verifier():
+    """JWTTokenVerifier checks the token's audience against every name this server
+    answers to (`accepted_audiences`); the SDK's own check knows only
+    `resource_server_url`. mcp 2.2 warns until the choice is made explicitly."""
+    config = OAuthConfig(
+        issuers=(TrustedIssuer(issuer=ISSUER, jwks_url="https://auth.example/jwks"),), resource=RESOURCE
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        settings = auth_settings(config)
+
+    assert settings.validate_token_resource is False
 
 
 # --- More than one authorization server -------------------------------------

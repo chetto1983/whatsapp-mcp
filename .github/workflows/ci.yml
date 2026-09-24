@@ -25,19 +25,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
-      - name: Install dependencies
+      - name: Install the locked dependencies
         run: |
           cd whatsapp-mcp-server
-          uv venv
-          uv pip install ruff
+          uv sync --frozen --extra dev
       - name: Run ruff check
         run: |
           cd whatsapp-mcp-server
-          uv run ruff check .
+          uv run --frozen --extra dev ruff check .
       - name: Run ruff format check
         run: |
           cd whatsapp-mcp-server
-          uv run ruff format --check .
+          uv run --frozen --extra dev ruff format --check .
 
   go-lint:
     name: Go Lint
@@ -46,11 +45,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version-file: whatsapp-bridge/go.mod
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.7.1
+          version: v2.13.2
           working-directory: whatsapp-bridge
 
   go-build:
@@ -60,11 +59,15 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version-file: whatsapp-bridge/go.mod
       - name: Build
         run: |
           cd whatsapp-bridge
           go build -v ./...
+      - name: Test
+        run: |
+          cd whatsapp-bridge
+          go test ./...
 
   python-test:
     name: Python Tests
@@ -72,12 +75,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
-      - name: Install dependencies
+      - name: Install the locked dependencies
         run: |
           cd whatsapp-mcp-server
-          uv venv
-          uv pip install -e ".[dev]"
+          uv sync --frozen --extra dev
       - name: Run tests
         run: |
           cd whatsapp-mcp-server
-          uv run pytest -v
+          uv run --frozen --extra dev pytest -v

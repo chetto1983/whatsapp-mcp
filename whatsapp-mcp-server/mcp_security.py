@@ -267,4 +267,7 @@ def auth_settings(config: OAuthConfig) -> AuthSettings:
         issuer_url=config.home.issuer,
         resource_server_url=config.resource,
         required_scopes=[MCP_TOOLS_SCOPE],
+        # JWTTokenVerifier already checks the audience against every accepted name;
+        # the SDK's check would compare the token with this one URL only.
+        validate_token_resource=False,
     )

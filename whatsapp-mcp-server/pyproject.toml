@@ -18,12 +18,15 @@ classifiers = [
 dependencies = [
     # mcp 2.0.0 is the SDK for the 2026-07-28 revision: stateless core, the
     # extensions framework, and MCP Apps in `mcp.server.apps`. It removed
-    # `mcp.server.fastmcp` outright, so this floor is a requirement, not a
-    # preference. The SDK provides its own `httpx2` transport client.
-    "mcp>=2.0.0",
+    # `mcp.server.fastmcp` outright. 2.2.0 is the release this server's lock was
+    # audited on (2026-09-24, no known vulnerabilities). The SDK provides its
+    # own `httpx2` transport client.
+    "mcp>=2.2.0",
     "pyjwt[crypto]>=2.13.0",
     "requests>=2.34.2",
-    "anyio<4.14",
+    # 4.14.2 fixes CVE-2026-63374 and CVE-2026-64847. The old `<4.14` cap came
+    # from a dependabot bump, not from an incompatibility.
+    "anyio>=4.14.2",
 ]
 
 [project.optional-dependencies]
