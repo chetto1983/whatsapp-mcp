@@ -62,7 +62,9 @@ def test_bridge_post_helpers_include_identity_and_auth(monkeypatch, tmp_path, fu
     media_file.write_bytes(b"ogg")
     resolved_args = tuple(str(media_file) if arg == "FILE" else arg for arg in args)
 
-    def fake_post(url, json, headers=None):
+    def fake_post(url, json, headers=None, **kwargs):
+        # download_media alone passes timeout=; the other four calls in this
+        # parametrization do not, so the stub accepts and ignores it.
         calls.append({"url": url, "json": json, "headers": headers})
         return DummyResponse()
 

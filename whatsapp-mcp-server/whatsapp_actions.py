@@ -12,6 +12,10 @@ from tenant_context import TENANT_ID_HEADER, current_identity
 
 WHATSAPP_API_BASE_URL = os.getenv("WHATSAPP_API_URL", "http://localhost:8081/api")
 
+# Above the tenant gateway's own 65 s (tenant_gateway.py), so the gateway's answer
+# arrives first; the bridge itself gives a media download 60 s to write.
+DOWNLOAD_TIMEOUT_SECONDS = 70
+
 
 def _read_bridge_token() -> str:
     token = os.getenv("WHATSAPP_BRIDGE_TOKEN", "").strip()
@@ -203,7 +207,7 @@ def download_media(message_id: str, chat_jid: str) -> str | None:
         url = f"{WHATSAPP_API_BASE_URL}/download"
         payload = {"message_id": message_id, "chat_jid": chat_jid}
 
-        response = requests.post(url, json=payload, headers=_bridge_headers())
+        response = requests.post(url, json=payload, headers=_bridge_headers(), timeout=DOWNLOAD_TIMEOUT_SECONDS)
 
         if response.status_code == 200:
             result = response.json()

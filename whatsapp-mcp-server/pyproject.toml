@@ -51,6 +51,7 @@ py-modules = [
     "apps_ui",
     "audio",
     "main",
+    "media_files",
     "mcp_config",
     "mcp_security",
     "store_migration",

@@ -1,6 +1,7 @@
 """Tenant-scoped message and chat queries."""
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from typing import Any
 
@@ -349,3 +350,18 @@ def list_chats(
     finally:
         if "conn" in locals():
             conn.close()
+
+
+def get_media_meta(message_id: str, chat_jid: str) -> tuple[str | None, str | None] | None:
+    """A message's `(media_type, filename)` in the active tenant's store, or None when
+    the store has no such message -- including a tenant with no messages.db yet, before
+    its first pairing. Another tenant's message id finds nothing here."""
+    try:
+        with closing(sqlite3.connect(MESSAGES_DB_PATH)) as conn:
+            return conn.execute(
+                "SELECT media_type, filename FROM messages WHERE id = ? AND chat_jid = ?",
+                (message_id, chat_jid),
+            ).fetchone()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
