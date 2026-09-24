@@ -34,7 +34,7 @@ Thanks for the PR! A couple of quick checks before you submit:
 <!-- How did you verify this? Manual steps, new tests, screenshots/logs as needed. -->
 
 - [ ] Added or updated tests
-- [ ] Ran `uv run pytest -v` (Python changes)
+- [ ] Ran `uv run --locked --extra dev pytest -v` (Python changes)
 - [ ] Ran `golangci-lint run` and `go build ./...` (Go changes)
 - [ ] Manually exercised the affected code path
 

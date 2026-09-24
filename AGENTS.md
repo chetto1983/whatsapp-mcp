@@ -64,11 +64,11 @@ go test ./...               # tests (sparse today)
 
 # Python MCP server
 cd whatsapp-mcp-server
-uv sync --extra dev
+uv sync --locked --extra dev
 uv run main.py              # dev
-uv run pytest -v            # tests
-uv run ruff check .         # lint
-uv run ruff format .        # format
+uv run --locked --extra dev pytest -v       # tests
+uv run --locked --extra dev ruff check .    # lint
+uv run --locked --extra dev ruff format .   # format
 ```
 
 ## CI gates

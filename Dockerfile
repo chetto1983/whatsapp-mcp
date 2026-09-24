@@ -31,7 +31,7 @@ COPY --from=bridge-build /out/whatsapp-bridge /usr/local/bin/whatsapp-bridge
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN cd /app/whatsapp-mcp-server \
-    && uv sync --frozen --no-dev \
+    && uv sync --locked --no-dev \
     && sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
     && chmod +x /usr/local/bin/entrypoint.sh
 

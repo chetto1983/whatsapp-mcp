@@ -267,7 +267,10 @@ def auth_settings(config: OAuthConfig) -> AuthSettings:
         issuer_url=config.home.issuer,
         resource_server_url=config.resource,
         required_scopes=[MCP_TOOLS_SCOPE],
-        # JWTTokenVerifier already checks the audience against every accepted name;
-        # the SDK's check would compare the token with this one URL only.
+        # JWTTokenVerifier.verify_token always reports AccessToken.resource as
+        # config.resource (this same URL), so the SDK's own check would compare that
+        # value to itself -- true and inert either way. The check that actually scopes a
+        # token is the audience check in _decode, against every name in
+        # accepted_audiences. False documents that and silences the 2.2 warning.
         validate_token_resource=False,
     )

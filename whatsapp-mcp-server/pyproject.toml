@@ -18,14 +18,19 @@ classifiers = [
 dependencies = [
     # mcp 2.0.0 is the SDK for the 2026-07-28 revision: stateless core, the
     # extensions framework, and MCP Apps in `mcp.server.apps`. It removed
-    # `mcp.server.fastmcp` outright. 2.2.0 is the release this server's lock was
-    # audited on (2026-09-24, no known vulnerabilities). The SDK provides its
-    # own `httpx2` transport client.
+    # `mcp.server.fastmcp` outright. The 2.2.0 floor is not merely "newer": it
+    # is the release that introduced `AuthSettings.validate_token_resource`,
+    # which mcp_security.py's auth_settings() sets explicitly. The SDK
+    # provides its own `httpx2` transport client.
     "mcp>=2.2.0",
     "pyjwt[crypto]>=2.13.0",
     "requests>=2.34.2",
-    # 4.14.2 fixes CVE-2026-63374 and CVE-2026-64847. The old `<4.14` cap came
-    # from a dependabot bump, not from an incompatibility.
+    # 627db67 (#44) pinned anyio<4.9 for a real cancel-scope regression that
+    # crashed the MCP server at startup; ea5254f (dependabot, #49) widened
+    # that to <4.14 without addressing the regression, and the image
+    # (Python 3.11) has run the locked 4.9.0 since. 4.14.2 fixes
+    # CVE-2026-63374 and CVE-2026-64847; the server starts cleanly on the
+    # locked 4.15.1.
     "anyio>=4.14.2",
 ]
 

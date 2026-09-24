@@ -25,18 +25,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.18"
       - name: Install the locked dependencies
         run: |
           cd whatsapp-mcp-server
-          uv sync --frozen --extra dev
+          uv sync --locked --extra dev
       - name: Run ruff check
         run: |
           cd whatsapp-mcp-server
-          uv run --frozen --extra dev ruff check .
+          uv run --locked --extra dev ruff check .
       - name: Run ruff format check
         run: |
           cd whatsapp-mcp-server
-          uv run --frozen --extra dev ruff format --check .
+          uv run --locked --extra dev ruff format --check .
 
   go-lint:
     name: Go Lint
@@ -75,11 +77,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.18"
       - name: Install the locked dependencies
         run: |
           cd whatsapp-mcp-server
-          uv sync --frozen --extra dev
+          uv sync --locked --extra dev
       - name: Run tests
         run: |
           cd whatsapp-mcp-server
-          uv run --frozen --extra dev pytest -v
+          uv run --locked --extra dev pytest -v

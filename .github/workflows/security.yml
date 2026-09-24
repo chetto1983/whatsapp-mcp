@@ -59,11 +59,13 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.18"
 
       - name: Export the locked dependencies
         run: |
           cd whatsapp-mcp-server
-          uv export --frozen --no-hashes --no-dev -o requirements-audit.txt
+          uv export --locked --no-hashes --no-dev -o requirements-audit.txt
 
       - name: Audit dependencies
         run: uvx pip-audit -r whatsapp-mcp-server/requirements-audit.txt --no-deps --disable-pip

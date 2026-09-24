@@ -63,13 +63,15 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: whatsapp-bridge/go.mod
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.18"
 
       - name: Validate version consistency
         run: python .github/scripts/check_versions.py --tag "${{ needs.release-please.outputs.tag_name }}"
