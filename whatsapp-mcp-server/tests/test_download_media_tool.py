@@ -125,11 +125,15 @@ async def test_a_failed_download_says_so_and_links_nothing(signed_in, seed_media
 
 
 @pytest.mark.asyncio
-async def test_media_over_the_cap_is_linked_with_its_size_but_not_served(
-    signed_in, seed_media, bridge_download, monkeypatch
+@pytest.mark.parametrize(
+    ("cap", "served"), [(len(PNG) - 1, False), (len(PNG), True)], ids=["one-over-the-cap", "exactly-the-cap"]
+)
+async def test_media_is_served_up_to_the_cap_and_only_linked_past_it(
+    signed_in, seed_media, bridge_download, monkeypatch, cap, served
 ):
-    """The link states the size, so a client can decline before it reads."""
-    monkeypatch.setattr(media_files, "MAX_MEDIA_FILE_BYTES", 8)
+    """The link states the size either way, so a client can decline before it reads.
+    A file of exactly the cap is served: only one that exceeds it is refused."""
+    monkeypatch.setattr(media_files, "MAX_MEDIA_FILE_BYTES", cap)
     signed_in(TENANT_A)
     seed_media(TENANT_A, MSG, CHAT, "image")
     bridge_download(PNG)
@@ -137,8 +141,12 @@ async def test_media_over_the_cap_is_linked_with_its_size_but_not_served(
     async with Client(main.mcp) as client:
         result = await client.call_tool("download_media", {"message_id": MSG, "chat_jid": CHAT})
         [link] = _links(result)
-        with pytest.raises(MCPError, match="exceeds the 8-byte cap"):
-            await client.read_resource(str(link.uri))
+        if served:
+            [contents] = (await client.read_resource(str(link.uri))).contents
+            assert base64.b64decode(contents.blob) == PNG
+        else:
+            with pytest.raises(MCPError, match=f"exceeds the {cap}-byte cap"):
+                await client.read_resource(str(link.uri))
 
     assert link.size == len(PNG)
 

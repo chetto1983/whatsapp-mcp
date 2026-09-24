@@ -315,7 +315,8 @@ Download the media of a received message.
 reading any resource, including the MCP Apps view, needs the same signed-in
 subject. Listing stays open.
 
-A document keeps the name its sender gave it. Other media are named
+A document keeps the name its sender gave it, plus the extension its bytes
+declare when the name has none. Other media are named
 `<type>_<message_id><ext>` and typed by their first bytes, because the bridge
 saves every image as `.jpg`.
 

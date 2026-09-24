@@ -3,8 +3,9 @@
 
 The bridge stores no MIME type, writes every image as `.jpg` (PNGs included) and
 drops a document's own name when it saves the file, so none of the three can be
-read off the path it returns. A document is named by the name its sender gave it
-(`messages.filename`); everything else is typed by its first bytes.
+read off the path it returns. A document keeps the name its sender gave it
+(`messages.filename`), plus the extension its bytes declare when the name has none;
+everything else is named and typed by its first bytes.
 """
 
 import json
@@ -49,6 +50,9 @@ _TYPES = mimetypes.MimeTypes()
 _TYPES.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
 _TYPES.add_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx")
 _TYPES.add_type("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx")
+# The container type of each `guess_type` encoding worth naming; the others (compress,
+# br) fall back to unknown bytes rather than to the type of what is inside.
+_ENCODED_TYPES = {"gzip": "application/gzip", "bzip2": "application/x-bzip2", "xz": "application/x-xz"}
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,16 @@ def describe(media_type: str | None, filename: str | None, message_id: str, head
         # The sender chose this name; only its last segment is a file name.
         name = PurePosixPath((filename or "").replace("\\", "/")).name
         if name not in ("", ".."):
-            return name, _TYPES.guess_type(name)[0] or sniff(head, media_type)[0]
+            sniffed_mime, sniffed_ext = sniff(head, media_type)
+            mime, encoding = _TYPES.guess_type(name)
+            if encoding:
+                # `export.csv.gz` is a gzip file, not a CSV: the bytes are the container.
+                mime = _ENCODED_TYPES.get(encoding, OCTET_STREAM)
+            if not PurePosixPath(name).suffix:
+                # The bridge stores a nameless document as `document_<ts>_<id>`, so a name
+                # with no extension is common, and a client picks its reader from the extension.
+                name += sniffed_ext
+            return name, mime or sniffed_mime
     mime, ext = sniff(head, media_type)
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in message_id)
     return f"{media_type or 'media'}_{safe_id}{ext}", mime
@@ -153,11 +166,20 @@ def read_bytes(message_id: str, chat_jid: str) -> bytes:
         if media is None:
             raise ResourceNotFoundError(f"no downloadable media for message {message_id} in {chat_jid}")
         if media.size_bytes > MAX_MEDIA_FILE_BYTES:
-            raise ResourceError(f"{media.size_bytes} bytes exceeds the {MAX_MEDIA_FILE_BYTES}-byte cap")
+            raise _over_cap(media.size_bytes)
         with open(media.path, "rb") as handle:
-            return handle.read()
+            # The size above was read before this open. Bound the read itself, so a file
+            # that grew in between is refused instead of loaded whole.
+            data = handle.read(MAX_MEDIA_FILE_BYTES + 1)
+        if len(data) > MAX_MEDIA_FILE_BYTES:
+            raise _over_cap(len(data))  # a lower bound: the read stopped at the cap
+        return data
     except OSError as err:
         raise ResourceError(f"media unreadable: {err}") from err
+
+
+def _over_cap(size: int) -> ResourceError:
+    return ResourceError(f"{size} bytes exceeds the {MAX_MEDIA_FILE_BYTES}-byte cap")
 
 
 def _json_result(body: dict[str, Any]) -> CallToolResult:

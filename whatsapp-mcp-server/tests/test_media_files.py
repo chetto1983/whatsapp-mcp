@@ -8,6 +8,7 @@ bytes. Every case here is one a real chat produces.
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ResourceError
 
 import media_files
 import whatsapp_actions
@@ -52,6 +53,14 @@ def test_an_image_saved_as_jpg_that_is_a_png_is_named_and_typed_png():
         ("Relazione finale.docx", ("Relazione finale.docx", DOCX)),
         ("../../etc/passwd.pdf", ("passwd.pdf", "application/pdf")),
         ("C:\\Users\\anna\\Preventivo.xlsx", ("Preventivo.xlsx", XLSX)),
+        # Compressed: the bytes are the container, whatever the inner name says.
+        ("export.csv.gz", ("export.csv.gz", "application/gzip")),
+        ("backup.tar.gz", ("backup.tar.gz", "application/gzip")),
+        ("bundle.tgz", ("bundle.tgz", "application/gzip")),
+        ("data.gz", ("data.gz", "application/gzip")),
+        ("logs.txt.bz2", ("logs.txt.bz2", "application/x-bzip2")),
+        ("dump.sql.xz", ("dump.sql.xz", "application/x-xz")),
+        ("old.tar.Z", ("old.tar.Z", media_files.OCTET_STREAM)),
     ],
 )
 def test_a_document_keeps_the_name_its_sender_gave_it(filename, expected):
@@ -63,8 +72,21 @@ def test_a_document_without_a_usable_name_is_named_like_other_media(filename):
     assert media_files.describe("document", filename, MSG, b"%PDF-1.4") == (f"document_{MSG}.pdf", "application/pdf")
 
 
-def test_a_document_whose_name_has_no_known_type_is_typed_by_its_bytes():
-    assert media_files.describe("document", "scansione", MSG, b"%PDF-1.4") == ("scansione", "application/pdf")
+@pytest.mark.parametrize(
+    ("filename", "head", "expected"),
+    [
+        # The bridge stores a nameless document as `document_<ts>_<id>`, so a name with
+        # no extension is common: it gets the one its bytes declare.
+        ("scansione", b"%PDF-1.4", ("scansione.pdf", "application/pdf")),
+        ("Foto del 12 maggio", PNG, ("Foto del 12 maggio.png", "image/png")),
+        # Nothing to declare: the sender's name stands, typed as unknown.
+        ("README", b"PK\x03\x04", ("README", media_files.OCTET_STREAM)),
+        # An extension the table does not know is still the sender's: typed by the bytes.
+        ("scansione.scan", b"%PDF-1.4", ("scansione.scan", "application/pdf")),
+    ],
+)
+def test_a_document_whose_name_has_no_extension_gets_the_one_its_bytes_declare(filename, head, expected):
+    assert media_files.describe("document", filename, MSG, head) == expected
 
 
 def test_a_hostile_message_id_cannot_shape_the_file_name():
@@ -140,6 +162,23 @@ def test_a_downloaded_path_that_is_gone_raises(seed_media, monkeypatch, tmp_path
 
     with pytest.raises(OSError):
         media_files.media_file(MSG, CHAT)
+
+
+@pytest.mark.parametrize(("on_disk", "served"), [(8, True), (9, False)], ids=["at-the-cap", "one-past-it"])
+def test_the_read_is_bounded_by_the_cap_not_by_the_size_read_earlier(monkeypatch, tmp_path, on_disk, served):
+    """`media_file` reads the size before the read opens the file; a bridge write in
+    between must not slip a larger file past the cap."""
+    path = tmp_path / "grew.bin"
+    path.write_bytes(b"x" * on_disk)
+    stale = media_files.MediaFile(str(path), "grew.bin", media_files.OCTET_STREAM, size_bytes=4)
+    monkeypatch.setattr(media_files, "MAX_MEDIA_FILE_BYTES", 8)
+    monkeypatch.setattr(media_files, "media_file", lambda *_: stale)
+
+    if served:
+        assert media_files.read_bytes(MSG, CHAT) == b"x" * on_disk
+    else:
+        with pytest.raises(ResourceError, match="exceeds the 8-byte cap"):
+            media_files.read_bytes(MSG, CHAT)
 
 
 def test_the_bridge_download_gives_up_after_70_seconds(monkeypatch):
