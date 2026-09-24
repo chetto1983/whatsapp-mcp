@@ -94,6 +94,53 @@ async def test_middleware_rejects_missing_subject_before_tool(monkeypatch):
     assert called is False
 
 
+@pytest.mark.asyncio
+async def test_middleware_binds_identity_for_resource_read(monkeypatch):
+    """download_media links a whatsapp-media:// resource; reading it touches the same
+    tenant store the tool did, so it needs the same binding."""
+    middleware = SubjectTenantMiddleware()
+    ctx = SimpleNamespace(method="resources/read", meta=None)
+    monkeypatch.setattr(
+        tenant_context,
+        "get_access_token",
+        lambda: AccessToken(token="token", client_id="client", scopes=["mcp:tools"], subject=TENANT_B),
+    )
+
+    async def call_next(_ctx):
+        return {"identity": current_identity()}
+
+    assert await middleware(ctx, call_next) == {"identity": TENANT_B}
+
+
+@pytest.mark.asyncio
+async def test_middleware_rejects_missing_subject_before_resource_read(monkeypatch):
+    middleware = SubjectTenantMiddleware()
+    ctx = SimpleNamespace(method="resources/read", meta=None)
+    monkeypatch.setattr(tenant_context, "get_access_token", lambda: None)
+    called = False
+
+    async def call_next(_ctx):
+        nonlocal called
+        called = True
+
+    with pytest.raises(MCPError, match="OAuth subject is required"):
+        await middleware(ctx, call_next)
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_middleware_leaves_listing_unbound(monkeypatch):
+    """Listing tools or templates reads no tenant store and needs no subject."""
+    middleware = SubjectTenantMiddleware()
+    ctx = SimpleNamespace(method="resources/templates/list", meta=None)
+    monkeypatch.setattr(tenant_context, "get_access_token", lambda: None)
+
+    async def call_next(_ctx):
+        return "listed"
+
+    assert await middleware(ctx, call_next) == "listed"
+
+
 def test_sqlite_queries_are_isolated_between_tenants():
     path_a = _seed_chat(TENANT_A, "alice")
     path_b = _seed_chat(TENANT_B, "bob")

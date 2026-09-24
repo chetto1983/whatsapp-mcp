@@ -7,10 +7,15 @@ read off the path it returns. A document is named by the name its sender gave it
 (`messages.filename`); everything else is typed by its first bytes.
 """
 
+import json
 import mimetypes
 import os
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Any
+
+from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
+from mcp_types import CallToolResult, ResourceLink, TextContent
 
 import whatsapp_actions
 from whatsapp_query_messages import get_media_meta
@@ -107,3 +112,53 @@ def media_file(message_id: str, chat_jid: str) -> MediaFile | None:
         head = handle.read(_SNIFF_BYTES)
     name, mime = describe(meta[0], meta[1], message_id, head)
     return MediaFile(path=path, name=name, mime_type=mime, size_bytes=size)
+
+
+def download_result(message_id: str, chat_jid: str) -> CallToolResult:
+    """download_media's result: the file described as JSON, plus a link to its bytes.
+
+    `file_path` is where the bridge stored the file. `send_file` accepts it only when
+    WHATSAPP_MEDIA_ROOTS includes the bridge's store directory.
+    """
+    try:
+        media = media_file(message_id, chat_jid)
+    except OSError as err:
+        return _json_result({"success": False, "message": f"Media downloaded but unreadable: {err}"})
+    if media is None:
+        return _json_result({"success": False, "message": "Failed to download media"})
+    body = {
+        "success": True,
+        "message": "Media downloaded successfully",
+        "name": media.name,
+        "mime_type": media.mime_type,
+        "size_bytes": media.size_bytes,
+        "file_path": media.path,
+    }
+    uri = media_uri(chat_jid, message_id)
+    if uri is None:
+        body["message"] += "; no resource link, because this message id cannot be carried in a URI"
+        return _json_result(body)
+    link = ResourceLink(uri=uri, name=media.name, mime_type=media.mime_type, size=media.size_bytes)
+    return CallToolResult(content=[TextContent(text=json.dumps(body, ensure_ascii=False)), link])
+
+
+def read_bytes(message_id: str, chat_jid: str) -> bytes:
+    """The media's bytes for `resources/read`.
+
+    ResourceNotFoundError and ResourceError reach the client with their message;
+    any other exception would reach it as a bare "Error reading resource".
+    """
+    try:
+        media = media_file(message_id, chat_jid)
+        if media is None:
+            raise ResourceNotFoundError(f"no downloadable media for message {message_id} in {chat_jid}")
+        if media.size_bytes > MAX_MEDIA_FILE_BYTES:
+            raise ResourceError(f"{media.size_bytes} bytes exceeds the {MAX_MEDIA_FILE_BYTES}-byte cap")
+        with open(media.path, "rb") as handle:
+            return handle.read()
+    except OSError as err:
+        raise ResourceError(f"media unreadable: {err}") from err
+
+
+def _json_result(body: dict[str, Any]) -> CallToolResult:
+    return CallToolResult(content=[TextContent(text=json.dumps(body, ensure_ascii=False))])

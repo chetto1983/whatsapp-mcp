@@ -128,6 +128,7 @@ When adding a new env var: document it here, in `README.md`, and in `.env.exampl
 |---|---|
 | Add or modify an MCP tool | `whatsapp-mcp-server/main.py` |
 | Change DB queries / data conversion | `whatsapp-mcp-server/whatsapp.py` |
+| Change how received media is named, typed or served | `whatsapp-mcp-server/media_files.py` |
 | Change bridge REST API or event handling | `whatsapp-bridge/main.go` |
 | Change webhook payload | `whatsapp-bridge/webhook.go` |
 | Change CI behavior | `.github/workflows/*.yml` |

@@ -273,8 +273,7 @@ Send a media file (image, video, document).
 **Parameters:**
 
 - `recipient` (required): Phone number or group JID
-- `file_path` (required): Path to the file
-- `caption` (optional): Caption for the media
+- `media_path` (required): Absolute path to the file
 
 The bridge only reads files inside configured media roots. By default this is
 `~/.local/share/whatsapp-mcp/outbox`; set `WHATSAPP_MEDIA_ROOTS` to allow
@@ -287,19 +286,38 @@ Send a voice message (automatically converts to Opus .ogg format).
 **Parameters:**
 
 - `recipient` (required): Phone number or group JID
-- `file_path` (required): Path to audio file
+- `media_path` (required): Absolute path to the audio file
 
 Converted audio is sent through the same media-path confinement as
 `send_file`.
 
 #### `download_media`
 
-Download media from a received message.
+Download the media of a received message.
 
 **Parameters:**
 
 - `message_id` (required): ID of the message with media
 - `chat_jid` (required): JID of the chat containing the message
+
+**Returns** two content blocks:
+
+- JSON text with `success`, `message`, `name`, `mime_type`, `size_bytes` and
+  `file_path`. `file_path` is where the WhatsApp server stored the file, inside
+  its container; `send_file` accepts it only when `WHATSAPP_MEDIA_ROOTS`
+  includes the bridge's store directory.
+- A `resource_link` to `whatsapp-media://{chat_jid}/{message_id}`. A client that
+  needs the bytes reads it with `resources/read` on the same authenticated
+  session, so the bytes never pass through the model. Reads above 25 MiB are
+  refused; the link states the size first.
+
+`resources/read` is bound to the caller's tenant exactly as `tools/call` is, so
+reading any resource, including the MCP Apps view, needs the same signed-in
+subject. Listing stays open.
+
+A document keeps the name its sender gave it. Other media are named
+`<type>_<message_id><ext>` and typed by their first bytes, because the bridge
+saves every image as `.jpg`.
 
 ### Chat Operations
 

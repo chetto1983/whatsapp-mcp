@@ -5,6 +5,8 @@ Fourteen tools over the bridge's SQLite store and REST API. Two of them —
 (`apps_ui`), so a host that negotiated `io.modelcontextprotocol/ui` renders a
 transcript or a chat index instead of a wall of JSON. Every host receives the
 same tool payload either way.
+`download_media` also links a `whatsapp-media://` resource (`media_files`) that a
+client reads the file's bytes back through, on the same authenticated session.
 
 Env-var handling is deferred to the `__main__` block so importing this module
 never parses env vars or exits the process.
@@ -16,14 +18,13 @@ import sys
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp_types import CallToolResult
 
+import media_files
 from apps_ui import CLIENT_URI, build_apps, openai_alias
 from mcp_config import resolve_run_kwargs, resolve_transport
 from mcp_security import JWTTokenVerifier, OAuthConfig, auth_settings
 from tenant_context import SubjectTenantMiddleware
-from whatsapp import (
-    download_media as whatsapp_download_media,
-)
 from whatsapp import (
     get_chat as whatsapp_get_chat,
 )
@@ -426,22 +427,25 @@ def send_audio_message(recipient: str, media_path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def download_media(message_id: str, chat_jid: str) -> dict[str, Any]:
-    """Download media from a WhatsApp message and get the local file path.
+def download_media(message_id: str, chat_jid: str) -> CallToolResult:
+    """Download the media of a received WhatsApp message.
+
+    Returns JSON with the file's name, MIME type, size and file path, plus a resource
+    link a client reads the bytes back through. The path is where the WhatsApp server
+    stored the file; send_file accepts it only when WHATSAPP_MEDIA_ROOTS includes the
+    bridge's store directory.
 
     Args:
         message_id: The ID of the message containing the media
         chat_jid: The JID of the chat containing the message
-
-    Returns:
-        A dictionary containing success status, a status message, and the file path if successful
     """
-    file_path = whatsapp_download_media(message_id, chat_jid)
+    return media_files.download_result(message_id, chat_jid)
 
-    if file_path:
-        return {"success": True, "message": "Media downloaded successfully", "file_path": file_path}
-    else:
-        return {"success": False, "message": "Failed to download media"}
+
+@mcp.resource(media_files.MEDIA_URI_TEMPLATE, name="whatsapp-media", mime_type=media_files.OCTET_STREAM)
+def read_media(chat_jid: str, message_id: str) -> bytes:
+    """The bytes of a message's media: the file download_media linked to, up to 25 MiB."""
+    return media_files.read_bytes(message_id, chat_jid)
 
 
 @mcp.tool()

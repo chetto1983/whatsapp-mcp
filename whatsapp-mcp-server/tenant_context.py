@@ -71,11 +71,16 @@ class TenantFile(os.PathLike[str]):
         return self.__fspath__()
 
 
+# Every method that reaches a tenant's store: a tool call, and the read of a
+# resource a tool linked (download_media's whatsapp-media://).
+_TENANT_METHODS = frozenset({"tools/call", "resources/read"})
+
+
 class SubjectTenantMiddleware:
-    """Bind each tool call to the authenticated OAuth subject."""
+    """Bind each tool call and resource read to the authenticated OAuth subject."""
 
     async def __call__(self, ctx: ServerRequestContext[Any, Any], call_next: CallNext):
-        if ctx.method != "tools/call":
+        if ctx.method not in _TENANT_METHODS:
             return await call_next(ctx)
         try:
             access_token = get_access_token()
