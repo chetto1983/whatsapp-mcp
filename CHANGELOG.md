@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.1...v0.3.0) (2026-09-24)
+
+
+### Features
+
+* isolate WhatsApp MCP by Aura identity ([0162170](https://github.com/chetto1983/whatsapp-mcp/commit/0162170940cfc9f0c1944c42d8365f352c71e0a6))
+* **media:** download_media links the file as whatsapp-media:// ([e3517d3](https://github.com/chetto1983/whatsapp-mcp/commit/e3517d349159d5043e14f1ce3398a23037cf5de7))
+* **media:** name and type a received file from its row and its bytes ([80ec41b](https://github.com/chetto1983/whatsapp-mcp/commit/80ec41bce793964e08a343f653846a07eed54a46))
+* **oauth:** trust more than one authorization server, key tenants on (iss, sub) ([081da94](https://github.com/chetto1983/whatsapp-mcp/commit/081da9403645270a3f7a1b6e73290401e6694b52))
+
+
+### Bug Fixes
+
+* **bridge:** download channel media, which WhatsApp sends unencrypted ([98b8d64](https://github.com/chetto1983/whatsapp-mcp/commit/98b8d64042be543b041384d0ffc503adffbe2ac7))
+* isolate OAuth MCP tenants by token subject ([a463da5](https://github.com/chetto1983/whatsapp-mcp/commit/a463da57dd7afd243b2db8827dd26891b661df7e))
+* **media:** name a Markdown document's type ([1ec0233](https://github.com/chetto1983/whatsapp-mcp/commit/1ec0233145b5ede7da1b68c315775087e44837ba))
+* **media:** name compressed and nameless documents by what they are, and bound the read ([3f5d2ed](https://github.com/chetto1983/whatsapp-mcp/commit/3f5d2ed9794834243f074f53a716fb9441351ca7))
+* **oauth:** let one server answer to every name it is reachable under ([6aaa87d](https://github.com/chetto1983/whatsapp-mcp/commit/6aaa87d4b72ff54bc9c51987f247f5eea777498f))
+
+
+### Documentation
+
+* **media:** say where the bridge stores the file ([f3571df](https://github.com/chetto1983/whatsapp-mcp/commit/f3571df8ee6dbecf2bb5a82e7c62c4e5c1e4e62f))
+* **security:** record the 0.2.1 media path fixes and upstream status ([e0b8345](https://github.com/chetto1983/whatsapp-mcp/commit/e0b83459ebd0a3b870f0823e317081022f1da00f))
+* **security:** record the 0.2.1 media path fixes and upstream status ([11023c8](https://github.com/chetto1983/whatsapp-mcp/commit/11023c864da00478fd2219b59370ba4cc03190ab))
+
 ## [0.2.1](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.0...v0.2.1) (2026-08-22)
 
 
