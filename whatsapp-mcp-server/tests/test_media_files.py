@@ -53,6 +53,8 @@ def test_an_image_saved_as_jpg_that_is_a_png_is_named_and_typed_png():
         ("Relazione finale.docx", ("Relazione finale.docx", DOCX)),
         ("../../etc/passwd.pdf", ("passwd.pdf", "application/pdf")),
         ("C:\\Users\\anna\\Preventivo.xlsx", ("Preventivo.xlsx", XLSX)),
+        # Aura sends Markdown, and the slim image's stdlib table has no .md.
+        ("notes.md", ("notes.md", "text/markdown")),
         # Compressed: the bytes are the container, whatever the inner name says.
         ("export.csv.gz", ("export.csv.gz", "application/gzip")),
         ("backup.tar.gz", ("backup.tar.gz", "application/gzip")),

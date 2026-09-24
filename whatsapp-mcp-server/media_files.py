@@ -45,11 +45,13 @@ _SNIFF_BYTES = 16
 
 # The standard library's own table, not the host's /etc/mime.types: the same name
 # must get the same type in the test run and in the slim image. WhatsApp documents
-# are mostly PDFs and Office files, and the built-in table lacks OOXML.
+# are mostly PDFs and Office files, and the built-in table lacks OOXML and, on 3.11,
+# .md, which Aura itself sends.
 _TYPES = mimetypes.MimeTypes()
 _TYPES.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
 _TYPES.add_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx")
 _TYPES.add_type("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx")
+_TYPES.add_type("text/markdown", ".md")
 # The container type of each `guess_type` encoding worth naming; the others (compress,
 # br) fall back to unknown bytes rather than to the type of what is inside.
 _ENCODED_TYPES = {"gzip": "application/gzip", "bzip2": "application/x-bzip2", "xz": "application/x-xz"}
