@@ -431,9 +431,9 @@ def download_media(message_id: str, chat_jid: str) -> CallToolResult:
     """Download the media of a received WhatsApp message.
 
     Returns JSON with the file's name, MIME type, size and file path, plus a resource
-    link a client reads the bytes back through. The path is where the WhatsApp server
-    stored the file; send_file accepts it only when WHATSAPP_MEDIA_ROOTS includes the
-    bridge's store directory.
+    link a client reads the bytes back through. The path is where the bridge stored
+    the file, inside this server's container; send_file accepts it only when
+    WHATSAPP_MEDIA_ROOTS includes the bridge's store directory.
 
     Args:
         message_id: The ID of the message containing the media

@@ -303,8 +303,8 @@ Download the media of a received message.
 **Returns** two content blocks:
 
 - JSON text with `success`, `message`, `name`, `mime_type`, `size_bytes` and
-  `file_path`. `file_path` is where the WhatsApp server stored the file, inside
-  its container; `send_file` accepts it only when `WHATSAPP_MEDIA_ROOTS`
+  `file_path`. `file_path` is where the bridge stored the file, inside this
+  server's container; `send_file` accepts it only when `WHATSAPP_MEDIA_ROOTS`
   includes the bridge's store directory.
 - A `resource_link` to `whatsapp-media://{chat_jid}/{message_id}`. A client that
   needs the bytes reads it with `resources/read` on the same authenticated
