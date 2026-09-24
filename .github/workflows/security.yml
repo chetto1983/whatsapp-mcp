@@ -68,7 +68,7 @@ jobs:
           uv export --locked --no-hashes --no-dev -o requirements-audit.txt
 
       - name: Audit dependencies
-        run: uvx pip-audit -r whatsapp-mcp-server/requirements-audit.txt --no-deps --disable-pip
+        run: uvx pip-audit@2.10.1 -r whatsapp-mcp-server/requirements-audit.txt --no-deps --disable-pip
         continue-on-error: true
 
   bandit:
