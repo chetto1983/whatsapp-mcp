@@ -1897,8 +1897,9 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// If we don't have all the media info we need, we can't download
-	if url == "" || len(mediaKey) == 0 || len(fileSHA256) == 0 || len(fileEncSHA256) == 0 || fileLength == 0 {
-		return false, "", "", "", fmt.Errorf("incomplete media information for download")
+	mediaKey, fileEncSHA256, err = downloadableMedia(url, mediaKey, fileSHA256, fileEncSHA256, fileLength)
+	if err != nil {
+		return false, "", "", "", err
 	}
 
 	fmt.Printf("Attempting to download media for message %s in chat %s...\n", messageID, chatJID)
@@ -1948,6 +1949,21 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 
 	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, absPath, len(mediaData))
 	return true, mediaType, filename, absPath, nil
+}
+
+// downloadableMedia returns the keys to download with, or an error if the row is
+// incomplete. Channel media is unencrypted, and whatsmeow's downloadAndDecrypt
+// takes that branch only for nil keys, so empty ones come back as nil.
+func downloadableMedia(url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) ([]byte, []byte, error) {
+	if url != "" && len(fileSHA256) > 0 && fileLength > 0 {
+		switch {
+		case len(mediaKey) > 0 && len(fileEncSHA256) > 0:
+			return mediaKey, fileEncSHA256, nil
+		case len(mediaKey) == 0 && len(fileEncSHA256) == 0:
+			return nil, nil, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("incomplete media information for download")
 }
 
 // Extract direct path from a WhatsApp media URL
