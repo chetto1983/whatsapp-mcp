@@ -14,6 +14,11 @@
           "jsonpath": "$.project.version"
         },
         {
+          "type": "toml",
+          "path": "whatsapp-mcp-server/uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='whatsapp-mcp-server')].version"
+        },
+        {
           "type": "json",
           "path": "server.json",
           "jsonpath": "$.version"
