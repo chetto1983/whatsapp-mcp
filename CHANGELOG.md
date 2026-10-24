@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.1...v0.3.0) (2026-10-24)
+
+
+### Features
+
+* isolate WhatsApp MCP by Aura identity ([0162170](https://github.com/chetto1983/whatsapp-mcp/commit/0162170940cfc9f0c1944c42d8365f352c71e0a6))
+* **media:** download_media links the file as whatsapp-media:// ([e3517d3](https://github.com/chetto1983/whatsapp-mcp/commit/e3517d349159d5043e14f1ce3398a23037cf5de7))
+* **media:** name and type a received file from its row and its bytes ([80ec41b](https://github.com/chetto1983/whatsapp-mcp/commit/80ec41bce793964e08a343f653846a07eed54a46))
+* **oauth:** trust more than one authorization server, key tenants on (iss, sub) ([081da94](https://github.com/chetto1983/whatsapp-mcp/commit/081da9403645270a3f7a1b6e73290401e6694b52))
+
+
+### Bug Fixes
+
+* **bridge:** an unpaired logout starts a fresh pairing ([d93de6b](https://github.com/chetto1983/whatsapp-mcp/commit/d93de6b1d4c613bc8a0c559b65c8e7809cae27e2))
+* **bridge:** download channel media, which WhatsApp sends unencrypted ([98b8d64](https://github.com/chetto1983/whatsapp-mcp/commit/98b8d64042be543b041384d0ffc503adffbe2ac7))
+* **bridge:** stop waiting on a QR channel whatsmeow left open ([1faab9c](https://github.com/chetto1983/whatsapp-mcp/commit/1faab9c8dcd5849bd3fef55a146c7ae391c50fba))
+* **deps:** build the bridge with Go 1.27.3 and golang.org/x/net v0.60.0 ([5f52373](https://github.com/chetto1983/whatsapp-mcp/commit/5f52373d693c1623f89b133e142b22fae0633ef9))
+* **deps:** patch Go and Python advisories, update whatsmeow to b2b1e71 ([c20d77e](https://github.com/chetto1983/whatsapp-mcp/commit/c20d77ef72e0fdadddf5e26ab3b158b44594c453))
+* **deps:** update certifi and opentelemetry-api past two advisories ([5dd44c0](https://github.com/chetto1983/whatsapp-mcp/commit/5dd44c0251a9c87828ebea0dd823f0028f8814d1))
+* **deps:** update uv to 0.13.5 and the image's setuptools to 84.2.1 ([8759377](https://github.com/chetto1983/whatsapp-mcp/commit/875937787e36dd0a056e2b99a8d8fd2e5575553e))
+* **deps:** update uv to 0.13.5 and the image's setuptools to 84.2.1 ([bab8940](https://github.com/chetto1983/whatsapp-mcp/commit/bab894000307b37846239aa637b9e257e650f502))
+* **deps:** update whatsmeow to b2b1e71 (2026-10-17) ([f1212b5](https://github.com/chetto1983/whatsapp-mcp/commit/f1212b52d6581f580020c22eaada4873880fda3a))
+* **deps:** update whatsmeow to f16f9ca (2026-10-14) ([215b010](https://github.com/chetto1983/whatsapp-mcp/commit/215b0107e8bdcfcddf01d74c13abc6a24c37b10b))
+* **gateway:** bring each bridge's output into the container log ([a25b632](https://github.com/chetto1983/whatsapp-mcp/commit/a25b632bb3885a4d3b8dd87dab5f549d713dd060))
+* isolate OAuth MCP tenants by token subject ([a463da5](https://github.com/chetto1983/whatsapp-mcp/commit/a463da57dd7afd243b2db8827dd26891b661df7e))
+* **media:** name a Markdown document's type ([1ec0233](https://github.com/chetto1983/whatsapp-mcp/commit/1ec0233145b5ede7da1b68c315775087e44837ba))
+* **media:** name compressed and nameless documents by what they are, and bound the read ([3f5d2ed](https://github.com/chetto1983/whatsapp-mcp/commit/3f5d2ed9794834243f074f53a716fb9441351ca7))
+* **oauth:** let one server answer to every name it is reachable under ([6aaa87d](https://github.com/chetto1983/whatsapp-mcp/commit/6aaa87d4b72ff54bc9c51987f247f5eea777498f))
+
+
+### Documentation
+
+* **media:** say where the bridge stores the file ([f3571df](https://github.com/chetto1983/whatsapp-mcp/commit/f3571df8ee6dbecf2bb5a82e7c62c4e5c1e4e62f))
+* **security:** record the 0.2.1 media path fixes and upstream status ([e0b8345](https://github.com/chetto1983/whatsapp-mcp/commit/e0b83459ebd0a3b870f0823e317081022f1da00f))
+* **security:** record the 0.2.1 media path fixes and upstream status ([11023c8](https://github.com/chetto1983/whatsapp-mcp/commit/11023c864da00478fd2219b59370ba4cc03190ab))
+
 ## [0.2.1](https://github.com/chetto1983/whatsapp-mcp/compare/v0.2.0...v0.2.1) (2026-08-22)
 
 
