@@ -4,7 +4,7 @@
 # - Authenticated tenant gateway on :8081 supervising isolated Go runtimes.
 # - One remote Python MCP server on :8080 for every OAuth subject.
 
-FROM golang:1.27.1-bookworm AS bridge-build
+FROM golang:1.27.3-bookworm AS bridge-build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
