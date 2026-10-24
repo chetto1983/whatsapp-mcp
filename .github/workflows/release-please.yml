@@ -71,7 +71,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.18"
+          version: "0.13.5"
 
       - name: Validate version consistency
         run: python .github/scripts/check_versions.py --tag "${{ needs.release-please.outputs.tag_name }}"

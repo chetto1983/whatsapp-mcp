@@ -22,7 +22,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv==0.12.18
+RUN pip install --no-cache-dir uv==0.13.5 setuptools==84.2.1
 
 WORKDIR /app
 COPY whatsapp-mcp-server/ ./whatsapp-mcp-server/
