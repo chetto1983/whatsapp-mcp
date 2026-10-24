@@ -28,7 +28,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.18"
+          version: "0.13.5"
 
       - name: Validate version consistency
         run: |
@@ -74,7 +74,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.18"
+          version: "0.13.5"
 
       - name: Build release artifacts
         run: |
