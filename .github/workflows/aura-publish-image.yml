@@ -35,11 +35,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: ISO week for the apt layer
+        id: week
+        run: echo "apt_week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          build-args: |
+            APT_WEEK=${{ steps.week.outputs.apt_week }}
           tags: |
             ghcr.io/${{ github.repository }}:sidecar
             ghcr.io/${{ github.repository }}:verygoodplugins-fusion

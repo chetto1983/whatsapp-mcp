@@ -72,6 +72,10 @@ jobs:
             org.opencontainers.image.title=whatsapp-mcp
             org.opencontainers.image.description=WhatsApp bridge (Go) + MCP server (Python) in one image
 
+      - name: ISO week for the apt layer
+        id: week
+        run: echo "apt_week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@v7
@@ -79,6 +83,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          build-args: |
+            APT_WEEK=${{ steps.week.outputs.apt_week }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
