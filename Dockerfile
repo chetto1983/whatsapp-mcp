@@ -21,9 +21,11 @@ FROM python:3.11-slim
 # apt-get upgrade takes the security fixes the base image trails: on 2026-11-09 Aura's weekly
 # scan found apt 3.0.3 (CVE-2026-109518) and zlib1g 1.3.1-1+b1 (CVE-2026-76844, CVE-2026-85091)
 # in its Debian 13 layer. The publish workflows pass the ISO week as APT_WEEK, which every RUN
-# below receives, so the layer leaves the GHA cache and runs again once a week.
+# below receives, so the layer leaves the GHA cache and runs again once a week. The echo only
+# makes that dependency visible in the command.
 ARG APT_WEEK=""
-RUN apt-get update \
+RUN echo "apt week: ${APT_WEEK}" >/dev/null \
+    && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
